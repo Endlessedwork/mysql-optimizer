@@ -1,0 +1,115 @@
+version: '3.9'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: optimizer-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-mysql_optimizer}
+      POSTGRES_USER: ${POSTGRES_USER:-optimizer_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-optimizer_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-optimizer_user} -d ${POSTGRES_DB:-mysql_optimizer}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - optimizer-network
+
+  # SaaS API Service
+  saas-api:
+    build:
+      context: ./saas-api
+      dockerfile: Dockerfile
+      target: production
+    container_name: optimizer-saas-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgres://${POSTGRES_USER:-optimizer_user}:${POSTGRES_PASSWORD:-optimizer_password}@postgres:5432/${POSTGRES_DB:-mysql_optimizer}
+      JWT_SECRET: ${JWT_SECRET}
+      API_SECRET: ${API_SECRET}
+    ports:
+      - "${API_PORT:-3001}:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - optimizer-network
+
+  # Admin UI Service
+  admin-ui:
+    build:
+      context: ./admin-ui
+      dockerfile: Dockerfile
+      target: production
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:3001}
+    container_name: optimizer-admin-ui
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3050
+      API_SECRET: ${API_SECRET}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+    ports:
+      - "${UI_PORT:-3050}:3050"
+    depends_on:
+      saas-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3050"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - optimizer-network
+
+  # Agent Service (commented - requires separate MySQL target configuration)
+  # agent:
+  #   build:
+  #     context: ./agent
+  #     dockerfile: Dockerfile
+  #   container_name: optimizer-agent
+  #   restart: unless-stopped
+  #   environment:
+  #     NODE_ENV: production
+  #     API_URL: http://saas-api:3001
+  #     API_KEY: ${AGENT_API_KEY}
+  #     # MySQL Target - configure per deployment
+  #     DB_HOST: ${MYSQL_TARGET_HOST}
+  #     DB_PORT: ${MYSQL_TARGET_PORT:-3306}
+  #     DB_USER: ${MYSQL_TARGET_USER}
+  #     DB_PASSWORD: ${MYSQL_TARGET_PASSWORD}
+  #     DB_DATABASE: ${MYSQL_TARGET_DATABASE}
+  #   depends_on:
+  #     saas-api:
+  #       condition: service_healthy
+  #   networks:
+  #     - optimizer-network
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  optimizer-network:
+    driver: bridge
+    name: optimizer-network

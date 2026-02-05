@@ -1,0 +1,34 @@
+{
+  "name": "mysql-optimizer-dashboard",
+  "version": "1.0.0",
+  "description": "Dashboard UI for MySQL Production Optimizer",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "keywords": [
+    "mysql",
+    "optimizer",
+    "dashboard",
+    "nextjs"
+  ],
+  "author": "MySQL Production Optimizer Team",
+  "license": "MIT",
+  "dependencies": {
+    "next": "14.2.3",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "styled-components": "^6.1.8",
+    "axios": "^1.6.7",
+    "recharts": "^2.12.7",
+    "date-fns": "^3.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.2",
+    "@types/react": "^18.2.74",
+    "@types/styled-components": "^5.1.34",
+    "typescript": "^5.4.5"
+  }
+}

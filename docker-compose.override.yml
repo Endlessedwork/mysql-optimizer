@@ -1,0 +1,28 @@
+version: '3.9'
+
+services:
+  saas-api:
+    build:
+      target: development
+    volumes:
+      - ./saas-api/src:/app/src:ro
+      - ./saas-api/package.json:/app/package.json:ro
+    environment:
+      NODE_ENV: development
+    command: npm run dev
+
+  admin-ui:
+    build:
+      target: development
+    volumes:
+      - ./admin-ui/src:/app/src:ro
+      - ./admin-ui/public:/app/public:ro
+      - ./admin-ui/package.json:/app/package.json:ro
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:3001
+    command: npm run dev
+
+  postgres:
+    ports:
+      - "5432:5432"

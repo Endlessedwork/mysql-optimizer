@@ -1,0 +1,44 @@
+# Dependencies
+node_modules
+
+# Build output
+.next
+out
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Git
+.git
+.gitignore
+
+# Tests
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+coverage
+jest.config.*
+cypress
+playwright
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# Docker
+Dockerfile*
+docker-compose*
+.docker*
+
+# Misc
+.DS_Store
+*.log
