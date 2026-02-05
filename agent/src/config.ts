@@ -12,7 +12,7 @@ export class Config {
   public readonly topNQueries: number;
   
   // Safety settings
-  public readonly allowedCommands: string[];
+  public readonly allowedCommands: readonly string[];
   
   // SaaS API settings
   public readonly apiUrl: string;
@@ -28,8 +28,9 @@ export class Config {
     this.maxExecutionTime = parseInt(process.env.MAX_EXECUTION_TIME || '5000', 10);
     this.throttleDelay = parseInt(process.env.THROTTLE_DELAY || '100', 10);
     this.topNQueries = parseInt(process.env.TOP_N_QUERIES || '100', 10);
-    
-    this.allowedCommands = (process.env.ALLOWED_COMMANDS || 'SELECT,SHOW,EXPLAIN').split(',');
+
+    // Safety: read-only commands only. DDL uses separate executeDDL() method.
+    this.allowedCommands = ['SELECT', 'SHOW', 'EXPLAIN'];
     
     this.apiUrl = process.env.API_URL || 'https://api.mysql-optimizer.com';
     this.apiKey = process.env.API_KEY || '';

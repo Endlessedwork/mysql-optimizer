@@ -5,7 +5,10 @@ let pool: Pool;
 export async function connectDB() {
   try {
     // Use PostgreSQL connection string from environment
-    const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL || 'postgres://localhost:5432/mysql_optimizer';
+    const connectionString = process.env.DATABASE_URL;
+    if (!connectionString) {
+      throw new Error('DATABASE_URL environment variable is required');
+    }
     
     pool = new Pool({
       connectionString,

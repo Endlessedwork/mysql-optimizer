@@ -22,10 +22,8 @@ export class MysqlConnector {
         user: this.config.user,
         password: this.config.password,
         database: this.config.database,
-        // Read-only connection
-        flags: '-CLIENT_MULTI_STATEMENTS',
         // Add timeout settings
-        timeout: this.config.maxExecutionTime,
+        connectTimeout: this.config.maxExecutionTime,
       });
       
       this.logger.info('Successfully connected to MySQL database');
@@ -55,9 +53,33 @@ export class MysqlConnector {
 
     try {
       const [rows] = await this.connection.execute(query, params);
-      return rows;
+      return rows as any[];
     } catch (error) {
-      this.logger.error(`Error executing query: ${query}`, error);
+      this.logger.error(`Error executing query (first 50 chars): ${query.substring(0, 50)}...`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Execute a DDL statement (ALTER TABLE only).
+   * Separate from executeQuery to enforce stricter validation.
+   */
+  async executeDDL(sql: string): Promise<any[]> {
+    if (!this.connection) {
+      throw new Error('Database connection not established');
+    }
+
+    // Only allow ALTER TABLE statements
+    const normalized = sql.trim().toUpperCase();
+    if (!normalized.startsWith('ALTER TABLE')) {
+      throw new Error(`Only ALTER TABLE statements allowed in executeDDL. Got: ${normalized.split(' ').slice(0, 3).join(' ')}`);
+    }
+
+    try {
+      const [rows] = await this.connection.execute(sql);
+      return rows as any[];
+    } catch (error) {
+      this.logger.error('Error executing DDL', error);
       throw error;
     }
   }
@@ -157,14 +179,20 @@ export class MysqlConnector {
     const explainPlans = [];
     for (const row of results) {
       try {
-        const explainQuery = `EXPLAIN ${row.DIGEST_TEXT}`;
+        // Only EXPLAIN SELECT queries - skip non-SELECT digests
+        const digestText = (row.DIGEST_TEXT || '').trim();
+        if (!digestText.toUpperCase().startsWith('SELECT')) {
+          this.logger.info(`Skipping EXPLAIN for non-SELECT query`);
+          continue;
+        }
+        const explainQuery = `EXPLAIN FORMAT=JSON ${digestText}`;
         const explainResult = await this.executeQuery(explainQuery);
         explainPlans.push({
-          digest_text: row.DIGEST_TEXT,
+          digest_text: digestText,
           explain_plan: explainResult
         });
       } catch (error) {
-        this.logger.warn(`Failed to get EXPLAIN plan for query: ${row.DIGEST_TEXT}`, error);
+        this.logger.warn(`Failed to get EXPLAIN plan for query`, error);
       }
     }
     

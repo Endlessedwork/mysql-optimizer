@@ -10,10 +10,9 @@ import type {
   AuditLogFilters,
 } from './types';
 
-// Base configuration (API ต้องรันคนละพอร์ตกับ Admin UI)
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3000'
-const API_SECRET = process.env.NEXT_PUBLIC_API_SECRET || process.env.API_SECRET || ''
-const TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID || 'default'
+// Route through server-side proxy to keep API_SECRET off the client
+// No secrets needed on client side - proxy handles authentication
+const API_BASE_URL = ''
 
 // Define API response type
 interface ApiResponse<T> {
@@ -28,13 +27,13 @@ async function apiFetch<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<ApiResponse<T>> {
-  const url = `${API_BASE_URL}${endpoint}`
+  // Rewrite /api/xxx to /api/proxy/xxx so it goes through server-side proxy
+  const proxyEndpoint = endpoint.replace(/^\/api\//, '/api/proxy/');
+  const url = `${API_BASE_URL}${proxyEndpoint}`;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'X-API-SECRET': API_SECRET,
-    'X-Tenant-Id': TENANT_ID,
     ...(options.headers as Record<string, string>),
-  }
+  };
 
   try {
     const response = await fetch(url, {
@@ -42,12 +41,9 @@ async function apiFetch<T>(
       headers,
     })
 
-    // Handle network errors
     if (!response.ok) {
       let errorMessage = 'Connection Error';
-      let errorStatus = response.status;
-      
-      // Handle specific HTTP status codes
+
       if (response.status === 401 || response.status === 403) {
         errorMessage = 'Unauthorized';
       } else if (response.status === 404) {
@@ -55,7 +51,7 @@ async function apiFetch<T>(
       } else if (response.status >= 500) {
         errorMessage = 'Server Error';
       }
-      
+
       return {
         data: null,
         error: errorMessage,
@@ -65,7 +61,6 @@ async function apiFetch<T>(
     }
 
     const body = await response.json()
-    // Backend ส่ง { success, data } หรือ { success, error }
     const data = body && typeof body === 'object' && 'data' in body ? body.data : body
 
     return {
@@ -75,7 +70,6 @@ async function apiFetch<T>(
       ok: true
     }
   } catch (error) {
-    // Handle network errors
     return {
       data: null,
       error: 'Connection Error',

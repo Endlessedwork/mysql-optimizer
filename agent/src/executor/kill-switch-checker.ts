@@ -1,5 +1,6 @@
 import { Config } from '../config';
 import { Logger } from '../logger';
+import { authHeaders } from '../utils/api-client';
 
 interface KillSwitchResponse {
   global_active: boolean;
@@ -23,9 +24,8 @@ export class KillSwitchChecker {
         `${this.saasApiBaseUrl}/api/kill-switch?connection_id=${encodeURIComponent(connectionId)}`,
         {
           method: 'GET',
-          headers: {
-            'Content-Type': 'application/json'
-          }
+          headers: authHeaders(),
+          signal: AbortSignal.timeout(5000)
         }
       );
 

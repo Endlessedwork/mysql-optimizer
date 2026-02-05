@@ -2,6 +2,7 @@ import { MysqlConnector } from '../mysql-connector';
 import { Config } from '../config';
 import { Logger } from '../logger';
 import { ExecutionRun } from '../types';
+import { validateIdentifier, validateIdentifiers } from '../utils/sql-validator';
 
 export interface IndexExecutionResult {
   success: boolean;
@@ -21,22 +22,21 @@ export class IndexExecutor {
   }
 
   async executeAddIndex(executionRun: ExecutionRun): Promise<IndexExecutionResult> {
-    const tableName = executionRun.table_name;
-    const indexName = executionRun.index_name;
-    const columns = executionRun.columns.join(', ');
-    
-    const sql = `
-      ALTER TABLE \`${tableName}\`
-      ADD INDEX \`${indexName}\` (${columns})
-      ALGORITHM=INPLACE, LOCK=NONE
-    `.trim();
+    // Validate all identifiers BEFORE building SQL
+    const tableName = validateIdentifier(executionRun.table_name);
+    const indexName = validateIdentifier(executionRun.index_name);
+    const columns = validateIdentifiers(executionRun.columns);
+
+    const columnList = columns.map(c => `\`${c}\``).join(', ');
+
+    const sql = `ALTER TABLE \`${tableName}\` ADD INDEX \`${indexName}\` (${columnList}) ALGORITHM=INPLACE, LOCK=NONE`;
 
     try {
       await this.connector.connect();
-      
-      this.logger.info(`Executing ADD INDEX statement: ${sql}`);
-      
-      await this.connector.executeQuery(sql);
+
+      this.logger.info(`Executing ADD INDEX on table: ${tableName}, index: ${indexName}`);
+
+      await this.connector.executeDDL(sql);
       
       this.logger.info(`Successfully added index ${indexName} to table ${tableName}`);
       

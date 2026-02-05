@@ -1,11 +1,21 @@
 import { FastifyInstance } from 'fastify';
 
-// fastify-jwt has no types; use require
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const fjwt = require('fastify-jwt');
 
 export function setupAuth(app: FastifyInstance): void {
+  const secret = process.env.JWT_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new Error('JWT_SECRET environment variable is required and must be at least 32 characters');
+  }
+
   app.register(fjwt, {
-    secret: process.env.JWT_SECRET || 'dev-secret-change-in-production'
+    secret,
+    sign: {
+      algorithm: 'HS256',
+      expiresIn: '8h'
+    },
+    verify: {
+      algorithms: ['HS256']
+    }
   });
 }

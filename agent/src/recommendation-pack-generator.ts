@@ -1,3 +1,5 @@
+import { randomUUID } from 'crypto';
+
 export class RecommendationPackGenerator {
   private findings: any[];
   private impactReport: any;
@@ -76,7 +78,7 @@ export class RecommendationPackGenerator {
   }
 
   private generateId(): string {
-    return 'rec_' + Math.random().toString(36).substr(2, 9);
+    return 'rec_' + randomUUID().replace(/-/g, '').substring(0, 12);
   }
 
   private generateFixOptions(finding: any): any[] {

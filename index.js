@@ -12,8 +12,26 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || 'http://localhost:3050',
+  credentials: true,
+}));
 app.use(express.json());
+
+// Authentication middleware
+const authMiddleware = (req, res, next) => {
+  const apiSecret = req.headers['x-api-secret'];
+  if (!process.env.API_SECRET) {
+    return res.status(500).json({ error: 'Server misconfiguration: API_SECRET not set' });
+  }
+  if (!apiSecret || apiSecret !== process.env.API_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+};
+
+// Apply auth to all /api routes
+app.use('/api', authMiddleware);
 
 // PostgreSQL connection pool
 const pgPool = new Pool({
@@ -32,7 +50,6 @@ const createMySQLConnection = (host, port, database, user, password) => {
     database,
     user,
     password,
-    multipleStatements: true
   });
 };
 

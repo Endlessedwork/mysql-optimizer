@@ -1,6 +1,7 @@
 import { ExecutionRun, ExecutionStatus, AuditLogEntry, VerificationResult } from '../types';
 import { Logger } from '../logger';
 import { Config } from '../config';
+import { authHeaders } from '../utils/api-client';
 
 export class ExecutionLogger {
   private logger: Logger;
@@ -180,9 +181,7 @@ export class ExecutionLogger {
     try {
       const response = await fetch(`${this.saasApiBaseUrl}/api/audit`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: authHeaders(),
         body: JSON.stringify(entry)
       });
 

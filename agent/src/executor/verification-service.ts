@@ -2,6 +2,8 @@ import { ExecutionRun, BaselineMetrics, AfterMetrics, VerificationResult, Rollba
 import { MysqlConnector } from '../mysql-connector';
 import { Config } from '../config';
 import { Logger } from '../logger';
+import { validateIdentifier } from '../utils/sql-validator';
+import { authHeaders } from '../utils/api-client';
 
 export class VerificationService {
   private connector: MysqlConnector;
@@ -157,13 +159,15 @@ export class VerificationService {
   ): Promise<void> {
     try {
       await this.connector.connect();
-      
-      const rollbackSql = `ALTER TABLE \`${executionRun.table_name}\` DROP INDEX \`${executionRun.index_name}\``;
-      
+
+      const tableName = validateIdentifier(executionRun.table_name);
+      const indexName = validateIdentifier(executionRun.index_name);
+      const rollbackSql = `ALTER TABLE \`${tableName}\` DROP INDEX \`${indexName}\``;
+
       this.logger.info(`Executing rollback: ${rollbackSql}`);
-      
+
       // Execute DROP INDEX
-      await this.connector.executeQuery(rollbackSql);
+      await this.connector.executeDDL(rollbackSql);
       
       this.logger.info(`Successfully rolled back index ${executionRun.index_name}`);
       
@@ -191,7 +195,7 @@ export class VerificationService {
           execution_run_id: executionRun.id,
           rollback_type: 'auto',
           trigger_reason: triggerReason,
-          rollback_sql: `ALTER TABLE \`${executionRun.table_name}\` DROP INDEX \`${executionRun.index_name}\``,
+          rollback_sql: `ALTER TABLE \`${validateIdentifier(executionRun.table_name)}\` DROP INDEX \`${validateIdentifier(executionRun.index_name)}\``,
           status: 'failed',
           created_at: new Date()
         });
@@ -205,9 +209,7 @@ export class VerificationService {
     try {
       const response = await fetch(`${this.saasApiBaseUrl}/api/rollbacks`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: authHeaders(),
         body: JSON.stringify(record)
       });
 

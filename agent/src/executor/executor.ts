@@ -6,6 +6,8 @@ import { VerificationService } from './verification-service';
 import { ExecutionLogger } from './execution-logger';
 import { Config } from '../config';
 import { Logger } from '../logger';
+import { validateIdentifier, validateIdentifiers } from '../utils/sql-validator';
+import { authHeaders } from '../utils/api-client';
 
 export class Executor {
   private killSwitchChecker: KillSwitchChecker;
@@ -34,6 +36,23 @@ export class Executor {
         await this.executionLogger.logScopeViolation(executionRun);
         await this.updateExecutionStatus(executionRun.id, 'failed', 'out_of_scope');
         throw new Error(`Action '${executionRun.action}' is out of scope. Only ADD_INDEX is supported.`);
+      }
+
+      // Validate all identifiers in the execution run
+      try {
+        validateIdentifier(executionRun.table_name);
+        validateIdentifier(executionRun.index_name);
+        validateIdentifiers(executionRun.columns);
+      } catch (validationError) {
+        await this.executionLogger.logExecutionFailed(executionRun, validationError, 'validation_error');
+        await this.updateExecutionStatus(executionRun.id, 'failed', 'validation_error');
+        throw new Error(`Input validation failed: ${(validationError as Error).message}`);
+      }
+
+      // Validate execution ID format (UUID)
+      const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!UUID_REGEX.test(executionRun.id)) {
+        throw new Error(`Invalid execution ID format: ${executionRun.id}`);
       }
 
       // 2. Atomic Job Claim - ต้อง claim ก่อนทำงาน
@@ -98,7 +117,8 @@ export class Executor {
       // ถ้า error ไม่ได้ถูก handle ไว้แล้ว ให้ log และ update status
       if (!error.message.includes('out of scope') &&
           !error.message.includes('Failed to claim') &&
-          !error.message.includes('Kill switch')) {
+          !error.message.includes('Kill switch') &&
+          !error.message.includes('Input validation failed')) {
         await this.executionLogger.logExecutionFailed(executionRun, error, 'execution_error');
         await this.updateExecutionStatus(executionRun.id, 'failed', 'execution_error');
       }
@@ -142,9 +162,7 @@ export class Executor {
         `${this.saasApiBaseUrl}/api/executions/${executionId}/claim`,
         {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
+          headers: authHeaders(),
           signal: AbortSignal.timeout(5000)
         }
       );
@@ -179,9 +197,7 @@ export class Executor {
         `${this.saasApiBaseUrl}/api/executions/${executionId}/status`,
         {
           method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json'
-          },
+          headers: authHeaders(),
           body: JSON.stringify({
             status,
             fail_reason: failReason,
