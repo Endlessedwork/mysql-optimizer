@@ -1,24 +1,27 @@
 'use client';
 
 import { useState } from 'react';
-import { KillSwitchStatus } from '@/lib/types';
+import { useToggleKillSwitch } from '@/hooks/useKillSwitch';
 import KillSwitchToggle from './KillSwitchToggle';
 import KillSwitchConfirmDialog from './KillSwitchConfirmDialog';
 
 interface ConnectionKillSwitchListProps {
   connections: { id: string; name: string }[];
-  connectionStatuses: KillSwitchStatus['connections'];
+  connectionStatuses: Record<string, boolean>;
+  onToggle?: () => void;
 }
 
 const ConnectionKillSwitchList: React.FC<ConnectionKillSwitchListProps> = ({ 
   connections, 
-  connectionStatuses 
+  connectionStatuses,
+  onToggle
 }) => {
   const [selectedConnection, setSelectedConnection] = useState<string | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [reason, setReason] = useState('');
   const [isToggling, setIsToggling] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { toggle } = useToggleKillSwitch();
 
   const handleToggle = async (connectionId: string) => {
     if (!reason.trim()) {
@@ -28,11 +31,16 @@ const ConnectionKillSwitchList: React.FC<ConnectionKillSwitchListProps> = ({
 
     setIsToggling(true);
     try {
-      // In a real implementation, this would call the API to toggle the kill switch
-      console.log(`Toggling kill switch for connection ${connectionId} with reason: ${reason}`);
+      const currentStatus = connectionStatuses[connectionId] || false;
+      await toggle({
+        connectionId,
+        enabled: !currentStatus,
+        reason
+      });
       setIsDialogOpen(false);
       setReason('');
       setSelectedConnection(null);
+      onToggle?.();
     } catch (err) {
       setError('Failed to toggle kill switch');
       console.error('Failed to toggle kill switch:', err);

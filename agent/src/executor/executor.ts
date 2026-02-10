@@ -114,11 +114,12 @@ export class Executor {
       await this.handleVerificationResult(executionRun, verificationResult);
       
     } catch (error) {
+      const err = error as Error;
       // ถ้า error ไม่ได้ถูก handle ไว้แล้ว ให้ log และ update status
-      if (!error.message.includes('out of scope') &&
-          !error.message.includes('Failed to claim') &&
-          !error.message.includes('Kill switch') &&
-          !error.message.includes('Input validation failed')) {
+      if (!err.message?.includes('out of scope') &&
+          !err.message?.includes('Failed to claim') &&
+          !err.message?.includes('Kill switch') &&
+          !err.message?.includes('Input validation failed')) {
         await this.executionLogger.logExecutionFailed(executionRun, error, 'execution_error');
         await this.updateExecutionStatus(executionRun.id, 'failed', 'execution_error');
       }

@@ -9,10 +9,13 @@ import {
 import { KillSwitchStatus, KillSwitchAuditLog, KillSwitchTogglePayload } from '@/lib/types';
 
 export const useKillSwitchStatus = () => {
-  const [globalStatus, setGlobalStatus] = useState<KillSwitchStatus | null>(null);
-  const [connectionStatuses, setConnectionStatuses] = useState<KillSwitchStatus[]>([]);
+  const [globalStatus, setGlobalStatus] = useState<boolean>(false);
+  const [connectionStatuses, setConnectionStatuses] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  const refetch = () => setRefreshKey(prev => prev + 1);
 
   useEffect(() => {
     const fetchStatus = async () => {
@@ -31,8 +34,8 @@ export const useKillSwitchStatus = () => {
           throw new Error(connectionsResponse.error || 'Failed to fetch kill switch status');
         }
         
-        setGlobalStatus({ global: globalResponse.data!, connections: connectionsResponse.data! });
-        setConnectionStatuses(connectionsResponse.data!);
+        setGlobalStatus(globalResponse.data ?? false);
+        setConnectionStatuses(connectionsResponse.data ?? {});
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to fetch kill switch status');
       } finally {
@@ -41,9 +44,9 @@ export const useKillSwitchStatus = () => {
     };
 
     fetchStatus();
-  }, []);
+  }, [refreshKey]);
 
-  return { globalStatus, connectionStatuses, loading, error };
+  return { globalStatus, connectionStatuses, loading, error, refetch };
 };
 
 export const useToggleKillSwitch = () => {
@@ -69,29 +72,43 @@ export const useToggleKillSwitch = () => {
   return { toggle, loading, error };
 };
 
+interface AuditLogResponse {
+  logs: Array<{
+    id: string;
+    entityType: string;
+    action: string;
+    changes: { enabled?: boolean; reason?: string } | null;
+    performedBy: string;
+    createdAt: string;
+  }>;
+  total: number;
+}
+
 export const useKillSwitchAuditLogs = () => {
-  const [auditLogs, setAuditLogs] = useState<KillSwitchAuditLog[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<AuditLogResponse['logs']>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchAuditLogs = async () => {
       try {
-        setLoading(true);
+        setIsLoading(true);
         const response = await getKillSwitchAuditLogs();
         if (!response.ok) {
           throw new Error(response.error || 'Failed to fetch audit logs');
         }
-        setAuditLogs(response.data || []);
+        // API returns { logs: [...], total, limit, offset }
+        const responseData = response.data as unknown as AuditLogResponse;
+        setData(responseData?.logs || []);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to fetch audit logs');
       } finally {
-        setLoading(false);
+        setIsLoading(false);
       }
     };
 
     fetchAuditLogs();
   }, []);
 
-  return { auditLogs, loading, error };
+  return { data, isLoading, error };
 };

@@ -26,4 +26,10 @@ export class Logger {
   error(message: string, error?: any) {
     console.error(`[${this.timestamp()}] ERROR: ${message}`, error ? this.sanitize(error) : '');
   }
+
+  debug(message: string, data?: any) {
+    if (process.env.DEBUG === 'true') {
+      console.log(`[${this.timestamp()}] DEBUG: ${message}`, data ? this.sanitize(data) : '');
+    }
+  }
 }

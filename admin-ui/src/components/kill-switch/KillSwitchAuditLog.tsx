@@ -1,10 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { KillSwitchAuditLog } from '@/lib/types';
+import type { KillSwitchAuditLog as KillSwitchAuditLogEntry } from '@/lib/types';
 
 interface KillSwitchAuditLogProps {
-  auditLogs: KillSwitchAuditLog[];
+  auditLogs: KillSwitchAuditLogEntry[];
 }
 
 const KillSwitchAuditLog: React.FC<KillSwitchAuditLogProps> = ({ auditLogs }) => {

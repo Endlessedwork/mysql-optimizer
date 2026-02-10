@@ -1,4 +1,4 @@
-import StatusBadge from '@/components/ui/StatusBadge';
+import { Badge } from '@/components/ui/Badge';
 import { Connection } from '@/lib/types';
 
 interface ConnectionStatusBadgeProps {
@@ -6,10 +6,11 @@ interface ConnectionStatusBadgeProps {
 }
 
 export const ConnectionStatusBadge = ({ connection }: ConnectionStatusBadgeProps) => {
+  const isActive = connection.status === 'active';
+
   return (
-    <StatusBadge 
-      status={connection.status === 'active' ? 'Active' : 'Disabled'} 
-      variant={connection.status === 'active' ? 'success' : 'error'}
-    />
+    <Badge variant={isActive ? 'success' : 'default'}>
+      {isActive ? 'Active' : 'Disabled'}
+    </Badge>
   );
 };

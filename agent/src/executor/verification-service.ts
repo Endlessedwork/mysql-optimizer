@@ -107,7 +107,7 @@ export class VerificationService {
       
       return {
         status: 'failed',
-        message: `Verification error: ${error.message}`
+        message: `Verification error: ${(error as Error).message}`
       };
     }
   }

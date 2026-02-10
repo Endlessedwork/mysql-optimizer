@@ -4,6 +4,7 @@ import { connectDB } from './database';
 import registerRoutes from './routes';
 import { setupAuth } from './auth';
 import { setupRBAC } from './rbac';
+import { runMigrations, seedDefaultTenant, seedSampleData } from './migrations';
 
 // Create Fastify instance
 const app = fastify({
@@ -15,11 +16,28 @@ async function main() {
     // Connect to database
     await connectDB();
     
+    // Run migrations (create missing tables)
+    const migrationResult = await runMigrations();
+    if (!migrationResult.success) {
+      console.error('Migration failed:', migrationResult.message);
+      // Continue anyway - tables might already exist
+    }
+    
+    // Seed default tenant if none exists
+    await seedDefaultTenant();
+    
+    // Seed sample data if enabled
+    await seedSampleData();
+    
     // Setup authentication
     setupAuth(app);
     
     // Setup RBAC
     setupRBAC(app);
+    
+    // Health check (no auth) – GET/HEAD for Docker healthcheck
+    app.get('/health', async (_req, reply) => reply.code(200).send({ ok: true }));
+    app.head('/health', async (_req, reply) => reply.code(200).send());
     
     // Register routes
     await registerRoutes(app);

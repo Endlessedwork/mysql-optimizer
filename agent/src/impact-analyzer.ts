@@ -10,7 +10,10 @@ export class ImpactAnalyzer {
   }
 
   analyzeImpact() {
-    const impactAnalysis = {
+    const impactAnalysis: {
+      recommendations: any[];
+      total_impact: number;
+    } = {
       recommendations: [],
       total_impact: 0
     };
@@ -131,7 +134,11 @@ export class ImpactAnalyzer {
   }
 
   private analyzeSchemaImpact(digest: any) {
-    const impact = {
+    const impact: {
+      tables_affected: string[];
+      columns_used: string[];
+      indexes_impacted: string[];
+    } = {
       tables_affected: [],
       columns_used: [],
       indexes_impacted: []

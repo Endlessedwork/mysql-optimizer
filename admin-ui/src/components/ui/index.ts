@@ -1,8 +1,13 @@
+export { Badge } from './Badge';
+export type { BadgeVariant } from './Badge';
 export { default as ConfirmDialog } from './ConfirmDialog';
 export { default as RiskWarning } from './RiskWarning';
 export { default as DataTable } from './DataTable';
-export { default as StatusBadge } from './StatusBadge';
+export type { Column, DataTableProps } from './DataTable';
 export { default as LoadingSpinner } from './LoadingSpinner';
-export { default as Card } from './Card';
+export { default as Card, StatCard } from './Card';
+export type { CardProps, StatCardProps } from './Card';
 export { default as Button } from './Button';
+export type { ButtonProps, ButtonVariant, ButtonSize } from './Button';
 export { default as EmptyState } from './EmptyState';
+export { ConnectionInfoCard } from './ConnectionInfoCard';

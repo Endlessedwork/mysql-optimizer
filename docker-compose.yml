@@ -34,6 +34,7 @@ services:
     restart: unless-stopped
     environment:
       NODE_ENV: production
+      HOST: 0.0.0.0
       PORT: 3001
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       JWT_SECRET: ${JWT_SECRET}
@@ -46,7 +47,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3001/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -78,7 +79,7 @@ services:
       saas-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3050"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3050"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -86,31 +87,70 @@ services:
     networks:
       - optimizer-network
 
-  # Agent Service (commented - requires separate MySQL target configuration)
-  # agent:
-  #   build:
-  #     context: ./agent
-  #     dockerfile: Dockerfile
-  #   container_name: optimizer-agent
-  #   restart: unless-stopped
-  #   environment:
-  #     NODE_ENV: production
-  #     API_URL: http://saas-api:3001
-  #     API_KEY: ${AGENT_API_KEY}
-  #     # MySQL Target - configure per deployment
-  #     DB_HOST: ${MYSQL_TARGET_HOST}
-  #     DB_PORT: ${MYSQL_TARGET_PORT:-3306}
-  #     DB_USER: ${MYSQL_TARGET_USER}
-  #     DB_PASSWORD: ${MYSQL_TARGET_PASSWORD}
-  #     DB_DATABASE: ${MYSQL_TARGET_DATABASE}
-  #   depends_on:
-  #     saas-api:
-  #       condition: service_healthy
-  #   networks:
-  #     - optimizer-network
+  # Agent Service
+  agent:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+      target: production
+    container_name: optimizer-agent
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      AGENT_MODE: ${AGENT_MODE:-poll}
+      API_URL: http://saas-api:3001
+      API_KEY: ${API_SECRET}
+      TENANT_ID: ${TENANT_ID}
+      AGENT_ID: ${AGENT_ID:-agent-1}
+      CONNECTION_PROFILE_ID: ${CONNECTION_PROFILE_ID:-}
+      POLL_INTERVAL_MS: ${POLL_INTERVAL_MS:-30000}
+      # MySQL Target - configure per deployment
+      DB_HOST: ${MYSQL_TARGET_HOST:-mysql}
+      DB_PORT: ${MYSQL_TARGET_PORT:-3306}
+      DB_USER: ${MYSQL_TARGET_USER:-optimizer}
+      DB_PASSWORD: ${MYSQL_TARGET_PASSWORD:-}
+      DB_DATABASE: ${MYSQL_TARGET_DATABASE:-}
+      # Limits
+      MAX_EXECUTION_TIME: ${MAX_EXECUTION_TIME:-5000}
+      TOP_N_QUERIES: ${TOP_N_QUERIES:-100}
+    depends_on:
+      saas-api:
+        condition: service_healthy
+    networks:
+      - optimizer-network
+
+  # MySQL for testing (optional - remove in production)
+  mysql:
+    image: mysql:8.0
+    container_name: optimizer-mysql-test
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${MYSQL_TEST_DATABASE:-testdb}
+      MYSQL_USER: ${MYSQL_TARGET_USER:-optimizer}
+      MYSQL_PASSWORD: ${MYSQL_TARGET_PASSWORD:-optimizerpass}
+    ports:
+      - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: >
+      --performance_schema=ON
+      --performance_schema_consumer_events_statements_current=ON
+      --performance_schema_consumer_events_statements_history=ON
+      --performance_schema_consumer_events_statements_history_long=ON
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-rootpassword}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - optimizer-network
 
 volumes:
   postgres_data:
+    driver: local
+  mysql_data:
     driver: local
 
 networks:

@@ -16,15 +16,10 @@ export const useRecommendations = (
   return useQuery<Recommendation[]>({
     queryKey: ['recommendations', statusFilter, connectionFilter],
     queryFn: async () => {
-      const params = new URLSearchParams();
-      if (statusFilter !== 'all') {
-        params.append('status', statusFilter);
-      }
-      if (connectionFilter) {
-        params.append('connectionId', connectionFilter);
-      }
-      
-      const response = await getRecommendations(connectionFilter ? connectionFilter : undefined);
+      const response = await getRecommendations(
+        connectionFilter || undefined,
+        statusFilter !== 'all' ? statusFilter : undefined
+      );
       if (!response.ok) {
         throw new Error(response.error || 'Failed to fetch recommendations');
       }

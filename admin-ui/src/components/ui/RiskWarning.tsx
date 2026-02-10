@@ -57,3 +57,4 @@ const RiskWarning: React.FC<RiskWarningProps> = ({ level, message, details }) =>
 };
 
 export default RiskWarning;
+export { RiskWarning };

@@ -1,6 +1,19 @@
 import { FastifyInstance } from 'fastify';
 import { authenticate } from '../middleware/auth';
-import { getConnections, getConnectionById, updateConnectionStatus } from '../models/connections.model';
+import { 
+  getConnections, 
+  getConnectionById, 
+  getConnectionDetailById,
+  updateConnectionStatus, 
+  createConnection,
+  updateConnection,
+  deleteConnection,
+  getConnectionCredentials,
+  CreateConnectionInput,
+  UpdateConnectionInput
+} from '../models/connections.model';
+import { createScanRun } from '../models/scan-runs.model';
+import mysql from 'mysql2/promise';
 
 export default async function connectionsRoutes(fastify: FastifyInstance) {
   // GET /api/connections - List all connections
@@ -19,6 +32,10 @@ export default async function connectionsRoutes(fastify: FastifyInstance) {
                 properties: {
                   id: { type: 'string' },
                   name: { type: 'string' },
+                  host: { type: 'string' },
+                  port: { type: 'number' },
+                  username: { type: 'string' },
+                  databaseName: { type: ['string', 'null'] },
                   status: { type: 'string' },
                   createdAt: { type: 'string' },
                   updatedAt: { type: 'string' }
@@ -45,6 +62,165 @@ export default async function connectionsRoutes(fastify: FastifyInstance) {
     }
   });
 
+  // ============================================================
+  // STATIC ROUTES - Must be registered BEFORE dynamic :id routes
+  // ============================================================
+
+  // POST /api/connections/test - Test connection without saving (for form validation)
+  fastify.post('/api/connections/test', {
+    preHandler: [authenticate],
+    schema: {
+      body: {
+        type: 'object',
+        properties: {
+          host: { type: 'string', minLength: 1 },
+          port: { type: 'number', minimum: 1, maximum: 65535 },
+          username: { type: 'string', minLength: 1 },
+          password: { type: 'string', minLength: 1 },
+          databaseName: { type: 'string' }
+        },
+        required: ['host', 'port', 'username', 'password']
+      }
+    }
+  }, async (request, reply) => {
+    try {
+      const body = request.body as {
+        host: string;
+        port: number;
+        username: string;
+        password: string;
+        databaseName?: string;
+      };
+
+      let connection;
+      try {
+        connection = await mysql.createConnection({
+          host: body.host,
+          port: body.port,
+          user: body.username,
+          password: body.password,
+          database: body.databaseName || undefined,
+          connectTimeout: 10000
+        });
+
+        await connection.query('SELECT 1');
+        await connection.end();
+
+        return {
+          success: true,
+          message: 'Connection successful',
+          data: {
+            host: body.host,
+            port: body.port,
+            connected: true
+          }
+        };
+      } catch (mysqlError: any) {
+        if (connection) {
+          try {
+            await connection.end();
+          } catch (e) {
+            // Ignore
+          }
+        }
+
+        return reply.status(400).send({
+          success: false,
+          error: `Connection failed: ${mysqlError.message}`,
+          data: {
+            host: body.host,
+            port: body.port,
+            connected: false,
+            errorCode: mysqlError.code
+          }
+        });
+      }
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({
+        success: false,
+        error: 'Failed to test connection'
+      });
+    }
+  });
+
+  // POST /api/connections/databases - List databases from connection credentials
+  fastify.post('/api/connections/databases', {
+    preHandler: [authenticate],
+    schema: {
+      body: {
+        type: 'object',
+        properties: {
+          host: { type: 'string', minLength: 1 },
+          port: { type: 'number', minimum: 1, maximum: 65535 },
+          username: { type: 'string', minLength: 1 },
+          password: { type: 'string', minLength: 1 }
+        },
+        required: ['host', 'port', 'username', 'password']
+      }
+    }
+  }, async (request, reply) => {
+    try {
+      const body = request.body as {
+        host: string;
+        port: number;
+        username: string;
+        password: string;
+      };
+
+      let connection;
+      try {
+        connection = await mysql.createConnection({
+          host: body.host,
+          port: body.port,
+          user: body.username,
+          password: body.password,
+          connectTimeout: 10000
+        });
+
+        // Get list of databases
+        const [rows] = await connection.query('SHOW DATABASES');
+        await connection.end();
+
+        // Filter out system databases
+        const systemDbs = ['information_schema', 'mysql', 'performance_schema', 'sys'];
+        const databases = (rows as any[])
+          .map((row: any) => row.Database)
+          .filter((db: string) => !systemDbs.includes(db));
+
+        return {
+          success: true,
+          data: {
+            databases
+          }
+        };
+      } catch (mysqlError: any) {
+        if (connection) {
+          try {
+            await connection.end();
+          } catch (e) {
+            // Ignore
+          }
+        }
+
+        return reply.status(400).send({
+          success: false,
+          error: `Failed to list databases: ${mysqlError.message}`
+        });
+      }
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({
+        success: false,
+        error: 'Failed to list databases'
+      });
+    }
+  });
+
+  // ============================================================
+  // DYNAMIC ROUTES - With :id parameter
+  // ============================================================
+
   // GET /api/connections/:id - Get connection detail
   fastify.get('/api/connections/:id', {
     preHandler: [authenticate],
@@ -66,6 +242,10 @@ export default async function connectionsRoutes(fastify: FastifyInstance) {
               properties: {
                 id: { type: 'string' },
                 name: { type: 'string' },
+                host: { type: 'string' },
+                port: { type: 'number' },
+                username: { type: 'string' },
+                databaseName: { type: ['string', 'null'] },
                 status: { type: 'string' },
                 createdAt: { type: 'string' },
                 updatedAt: { type: 'string' }
@@ -78,15 +258,16 @@ export default async function connectionsRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
-      const connection = await getConnectionById(id);
-      
+      // Use getConnectionDetailById to get full details including host, port, username
+      const connection = await getConnectionDetailById(id);
+
       if (!connection) {
         return reply.status(404).send({
           success: false,
           error: 'Connection not found'
         });
       }
-      
+
       return {
         success: true,
         data: connection
@@ -96,6 +277,103 @@ export default async function connectionsRoutes(fastify: FastifyInstance) {
       return reply.status(500).send({
         success: false,
         error: 'Failed to fetch connection'
+      });
+    }
+  });
+
+  // POST /api/connections/:id/scan - Request a scan run for this connection (pending; agent will pick up)
+  fastify.post('/api/connections/:id/scan', {
+    preHandler: [authenticate],
+    schema: {
+      params: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id']
+      },
+      response: {
+        201: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean' },
+            data: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                connectionProfileId: { type: 'string' },
+                status: { type: 'string' }
+              }
+            }
+          }
+        }
+      }
+    }
+  }, async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const connection = await getConnectionById(id);
+      if (!connection) {
+        return reply.status(404).send({
+          success: false,
+          error: 'Connection not found'
+        });
+      }
+      const tenantId = (request as any).tenantId || process.env.TENANT_ID;
+      if (!tenantId) {
+        return reply.status(400).send({
+          success: false,
+          error: 'Tenant ID is required'
+        });
+      }
+      const scanRun = await createScanRun(
+        { tenantId, connectionProfileId: id },
+        'pending'
+      );
+      return reply.status(201).send({
+        success: true,
+        data: scanRun
+      });
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({
+        success: false,
+        error: 'Failed to request scan'
+      });
+    }
+  });
+
+  // GET /api/connections/:id/credentials - Get connection credentials (for Agent only)
+  fastify.get('/api/connections/:id/credentials', {
+    preHandler: [authenticate],
+    schema: {
+      params: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' }
+        },
+        required: ['id']
+      }
+    }
+  }, async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const credentials = await getConnectionCredentials(id);
+
+      if (!credentials) {
+        return reply.status(404).send({
+          success: false,
+          error: 'Connection not found'
+        });
+      }
+
+      return {
+        success: true,
+        data: credentials
+      };
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({
+        success: false,
+        error: 'Failed to get connection credentials'
       });
     }
   });
@@ -165,6 +443,276 @@ export default async function connectionsRoutes(fastify: FastifyInstance) {
       return reply.status(500).send({
         success: false,
         error: 'Failed to update connection status'
+      });
+    }
+  });
+
+  // POST /api/connections - Create a new connection
+  fastify.post('/api/connections', {
+    preHandler: [authenticate],
+    schema: {
+      body: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', minLength: 1 },
+          host: { type: 'string', minLength: 1 },
+          port: { type: 'number', minimum: 1, maximum: 65535 },
+          username: { type: 'string', minLength: 1 },
+          password: { type: 'string', minLength: 1 },
+          databaseName: { type: 'string' }
+        },
+        required: ['name', 'host', 'port', 'username', 'password']
+      }
+    }
+  }, async (request, reply) => {
+    try {
+      const body = request.body as {
+        name: string;
+        host: string;
+        port: number;
+        username: string;
+        password: string;
+        databaseName?: string;
+      };
+      
+      // Get tenant_id from request (set by auth middleware)
+      const tenantId = (request as any).tenantId || process.env.TENANT_ID;
+      
+      if (!tenantId) {
+        return reply.status(400).send({
+          success: false,
+          error: 'Tenant ID is required'
+        });
+      }
+      
+      const input: CreateConnectionInput = {
+        tenantId,
+        name: body.name,
+        host: body.host,
+        port: body.port,
+        username: body.username,
+        password: body.password,
+        databaseName: body.databaseName
+      };
+      
+      const connection = await createConnection(input);
+      
+      return reply.status(201).send({
+        success: true,
+        data: connection
+      });
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({
+        success: false,
+        error: 'Failed to create connection'
+      });
+    }
+  });
+
+  // PUT /api/connections/:id - Update connection
+  fastify.put('/api/connections/:id', {
+    preHandler: [authenticate],
+    schema: {
+      params: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' }
+        },
+        required: ['id']
+      },
+      body: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', minLength: 1 },
+          host: { type: 'string', minLength: 1 },
+          port: { type: 'number', minimum: 1, maximum: 65535 },
+          username: { type: 'string', minLength: 1 },
+          password: { type: 'string' },
+          databaseName: { type: 'string' }
+        }
+      }
+    }
+  }, async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const body = request.body as UpdateConnectionInput;
+      
+      // Check if connection exists
+      const existing = await getConnectionById(id);
+      if (!existing) {
+        return reply.status(404).send({
+          success: false,
+          error: 'Connection not found'
+        });
+      }
+      
+      const connection = await updateConnection(id, body);
+      
+      return {
+        success: true,
+        data: connection
+      };
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({
+        success: false,
+        error: 'Failed to update connection'
+      });
+    }
+  });
+
+  // DELETE /api/connections/:id - Delete connection
+  fastify.delete('/api/connections/:id', {
+    preHandler: [authenticate],
+    schema: {
+      params: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' }
+        },
+        required: ['id']
+      }
+    }
+  }, async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      
+      const deleted = await deleteConnection(id);
+      
+      if (!deleted) {
+        return reply.status(404).send({
+          success: false,
+          error: 'Connection not found'
+        });
+      }
+      
+      return {
+        success: true,
+        message: 'Connection deleted successfully'
+      };
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({
+        success: false,
+        error: 'Failed to delete connection'
+      });
+    }
+  });
+
+  // POST /api/connections/:id/test - Test connection
+  fastify.post('/api/connections/:id/test', {
+    preHandler: [authenticate],
+    schema: {
+      params: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' }
+        },
+        required: ['id']
+      }
+    }
+  }, async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      
+      const credentials = await getConnectionCredentials(id);
+      
+      if (!credentials) {
+        return reply.status(404).send({
+          success: false,
+          error: 'Connection not found'
+        });
+      }
+      
+      // Try to connect to MySQL
+      let connection;
+      try {
+        connection = await mysql.createConnection({
+          host: credentials.host,
+          port: credentials.port,
+          user: credentials.username,
+          password: credentials.password,
+          database: credentials.databaseName || undefined,
+          connectTimeout: 10000 // 10 seconds timeout
+        });
+        
+        // Test query
+        await connection.query('SELECT 1');
+        
+        await connection.end();
+        
+        return {
+          success: true,
+          message: 'Connection successful',
+          data: {
+            host: credentials.host,
+            port: credentials.port,
+            connected: true
+          }
+        };
+      } catch (mysqlError: any) {
+        if (connection) {
+          try {
+            await connection.end();
+          } catch (e) {
+            // Ignore close errors
+          }
+        }
+        
+        return reply.status(400).send({
+          success: false,
+          error: `Connection failed: ${mysqlError.message}`,
+          data: {
+            host: credentials.host,
+            port: credentials.port,
+            connected: false,
+            errorCode: mysqlError.code
+          }
+        });
+      }
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({
+        success: false,
+        error: 'Failed to test connection'
+      });
+    }
+  });
+
+  // GET /api/connections/:id/detail - Get connection with full details (not password)
+  fastify.get('/api/connections/:id/detail', {
+    preHandler: [authenticate],
+    schema: {
+      params: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' }
+        },
+        required: ['id']
+      }
+    }
+  }, async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const connection = await getConnectionDetailById(id);
+      
+      if (!connection) {
+        return reply.status(404).send({
+          success: false,
+          error: 'Connection not found'
+        });
+      }
+      
+      return {
+        success: true,
+        data: connection
+      };
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({
+        success: false,
+        error: 'Failed to fetch connection details'
       });
     }
   });

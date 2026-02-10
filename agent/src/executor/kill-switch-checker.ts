@@ -35,7 +35,7 @@ export class KillSwitchChecker {
         return true;
       }
 
-      const data: KillSwitchResponse = await response.json();
+      const data = await response.json() as KillSwitchResponse;
       
       // Return true if either global or per-connection kill switch is active
       const isActive = data.global_active || data.connection_active;

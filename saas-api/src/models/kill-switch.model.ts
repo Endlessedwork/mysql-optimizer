@@ -99,7 +99,7 @@ export const toggleGlobalKillSwitch = async (enabled: boolean, reason?: string):
   const result = await Database.query<any>(
     `INSERT INTO kill_switch_settings (id, tenant_id, is_active, reason, created_at, updated_at)
     VALUES (gen_random_uuid(), NULL, $1, $2, NOW(), NOW())
-    ON CONFLICT (tenant_id) WHERE tenant_id IS NULL
+    ON CONFLICT (tenant_id)
     DO UPDATE SET is_active = $1, reason = $2, updated_at = NOW()
     RETURNING is_active as enabled, reason, updated_at as "updatedAt"`,
     [enabled, reason]

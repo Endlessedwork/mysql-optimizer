@@ -61,7 +61,7 @@ export class MysqlConnector {
   }
 
   /**
-   * Execute a DDL statement (ALTER TABLE only).
+   * Execute a DDL statement (safe DDL types only).
    * Separate from executeQuery to enforce stricter validation.
    */
   async executeDDL(sql: string): Promise<any[]> {
@@ -69,14 +69,25 @@ export class MysqlConnector {
       throw new Error('Database connection not established');
     }
 
-    // Only allow ALTER TABLE statements
+    // Allow safe DDL statements only
     const normalized = sql.trim().toUpperCase();
-    if (!normalized.startsWith('ALTER TABLE')) {
-      throw new Error(`Only ALTER TABLE statements allowed in executeDDL. Got: ${normalized.split(' ').slice(0, 3).join(' ')}`);
+    const allowedPrefixes = [
+      'ALTER TABLE',
+      'CREATE INDEX',
+      'DROP INDEX',
+      'OPTIMIZE TABLE',
+      'ANALYZE TABLE'
+    ];
+    
+    const isAllowed = allowedPrefixes.some(prefix => normalized.startsWith(prefix));
+    if (!isAllowed) {
+      throw new Error(`DDL type not allowed in executeDDL. Got: ${normalized.split(' ').slice(0, 3).join(' ')}. Allowed: ${allowedPrefixes.join(', ')}`);
     }
 
     try {
+      this.logger.info(`Executing DDL: ${sql}`);
       const [rows] = await this.connection.execute(sql);
+      this.logger.info('DDL executed successfully');
       return rows as any[];
     } catch (error) {
       this.logger.error('Error executing DDL', error);
@@ -149,9 +160,9 @@ export class MysqlConnector {
         MIN_TIMER_WAIT,
         MAX_TIMER_WAIT,
         SUM_ROWS_EXAMINED,
-        AVG_ROWS_EXAMINED,
+        CASE WHEN COUNT_STAR > 0 THEN SUM_ROWS_EXAMINED / COUNT_STAR ELSE 0 END AS AVG_ROWS_EXAMINED,
         SUM_ROWS_SENT,
-        AVG_ROWS_SENT
+        CASE WHEN COUNT_STAR > 0 THEN SUM_ROWS_SENT / COUNT_STAR ELSE 0 END AS AVG_ROWS_SENT
       FROM performance_schema.events_statements_summary_by_digest 
       ORDER BY COUNT_STAR DESC
       LIMIT 1000
@@ -161,19 +172,22 @@ export class MysqlConnector {
   }
 
   async getExplainPlans(topN: number): Promise<any[]> {
+    // Note: Using string interpolation for LIMIT because mysql2 prepared statements 
+    // don't work well with LIMIT on performance_schema tables
+    const limitValue = Math.max(1, Math.min(topN, 1000)); // Sanitize: 1-1000
     const query = `
       SELECT 
         DIGEST_TEXT,
         QUERY_SAMPLE_TEXT,
-        FORMAT_BYTES(SUM_ROWS_EXAMINED) AS TOTAL_ROWS_EXAMINED,
-        FORMAT_BYTES(AVG_ROWS_EXAMINED) AS AVG_ROWS_EXAMINED,
+        SUM_ROWS_EXAMINED AS TOTAL_ROWS_EXAMINED,
+        CASE WHEN COUNT_STAR > 0 THEN SUM_ROWS_EXAMINED / COUNT_STAR ELSE 0 END AS AVG_ROWS_EXAMINED,
         COUNT_STAR
       FROM performance_schema.events_statements_summary_by_digest 
       ORDER BY COUNT_STAR DESC
-      LIMIT ?
+      LIMIT ${limitValue}
     `;
     
-    const results = await this.executeQuery(query, [topN]);
+    const results = await this.executeQuery(query);
     
     // For each query, get the EXPLAIN plan
     const explainPlans = [];
@@ -264,5 +278,218 @@ export class MysqlConnector {
       triggers,
       events
     };
+  }
+
+  /**
+   * Get detailed table statistics including row counts, sizes, and fragmentation
+   */
+  async getTableStatistics(): Promise<any[]> {
+    const query = `
+      SELECT 
+        TABLE_SCHEMA,
+        TABLE_NAME,
+        ENGINE,
+        ROW_FORMAT,
+        TABLE_ROWS,
+        AVG_ROW_LENGTH,
+        DATA_LENGTH,
+        MAX_DATA_LENGTH,
+        INDEX_LENGTH,
+        DATA_FREE,
+        AUTO_INCREMENT,
+        CREATE_TIME,
+        UPDATE_TIME,
+        TABLE_COLLATION,
+        -- Calculated fields
+        ROUND((DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2) AS total_size_mb,
+        ROUND(DATA_FREE / 1024 / 1024, 2) AS fragmented_mb,
+        CASE WHEN DATA_LENGTH > 0 THEN ROUND(DATA_FREE / DATA_LENGTH * 100, 2) ELSE 0 END AS fragmentation_pct
+      FROM information_schema.TABLES 
+      WHERE TABLE_SCHEMA NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+        AND TABLE_TYPE = 'BASE TABLE'
+      ORDER BY (DATA_LENGTH + INDEX_LENGTH) DESC
+    `;
+    
+    return await this.executeQuery(query);
+  }
+
+  /**
+   * Get index usage statistics from performance_schema
+   */
+  async getIndexUsageStats(): Promise<any[]> {
+    try {
+      const query = `
+        SELECT 
+          OBJECT_SCHEMA,
+          OBJECT_NAME,
+          INDEX_NAME,
+          COUNT_FETCH AS read_count,
+          COUNT_INSERT AS insert_count,
+          COUNT_UPDATE AS update_count,
+          COUNT_DELETE AS delete_count,
+          (COUNT_FETCH + COUNT_INSERT + COUNT_UPDATE + COUNT_DELETE) AS total_operations
+        FROM performance_schema.table_io_waits_summary_by_index_usage
+        WHERE OBJECT_SCHEMA NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+          AND INDEX_NAME IS NOT NULL
+        ORDER BY total_operations DESC
+      `;
+      return await this.executeQuery(query);
+    } catch (error) {
+      this.logger.warn('Failed to get index usage stats (performance_schema may be disabled)', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get index cardinality and detailed index information
+   */
+  async getIndexCardinality(): Promise<any[]> {
+    const query = `
+      SELECT 
+        s.TABLE_SCHEMA,
+        s.TABLE_NAME,
+        s.INDEX_NAME,
+        s.NON_UNIQUE,
+        s.SEQ_IN_INDEX,
+        s.COLUMN_NAME,
+        s.CARDINALITY,
+        s.SUB_PART,
+        s.NULLABLE,
+        s.INDEX_TYPE,
+        t.TABLE_ROWS,
+        CASE 
+          WHEN t.TABLE_ROWS > 0 AND s.CARDINALITY > 0 
+          THEN ROUND(s.CARDINALITY / t.TABLE_ROWS * 100, 2)
+          ELSE 0 
+        END AS selectivity_pct
+      FROM information_schema.STATISTICS s
+      JOIN information_schema.TABLES t ON s.TABLE_SCHEMA = t.TABLE_SCHEMA AND s.TABLE_NAME = t.TABLE_NAME
+      WHERE s.TABLE_SCHEMA NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+      ORDER BY s.TABLE_SCHEMA, s.TABLE_NAME, s.INDEX_NAME, s.SEQ_IN_INDEX
+    `;
+    
+    return await this.executeQuery(query);
+  }
+
+  /**
+   * Get slow query analysis from performance_schema
+   */
+  async getSlowQueryAnalysis(): Promise<any[]> {
+    try {
+      const query = `
+        SELECT 
+          DIGEST,
+          DIGEST_TEXT,
+          COUNT_STAR AS execution_count,
+          ROUND(SUM_TIMER_WAIT / 1000000000000, 4) AS total_time_sec,
+          ROUND(AVG_TIMER_WAIT / 1000000000000, 4) AS avg_time_sec,
+          ROUND(MAX_TIMER_WAIT / 1000000000000, 4) AS max_time_sec,
+          SUM_ROWS_EXAMINED AS total_rows_examined,
+          ROUND(SUM_ROWS_EXAMINED / GREATEST(COUNT_STAR, 1), 0) AS avg_rows_examined,
+          SUM_ROWS_SENT AS total_rows_sent,
+          ROUND(SUM_ROWS_SENT / GREATEST(COUNT_STAR, 1), 0) AS avg_rows_sent,
+          SUM_ROWS_AFFECTED AS total_rows_affected,
+          SUM_CREATED_TMP_DISK_TABLES AS tmp_disk_tables,
+          SUM_CREATED_TMP_TABLES AS tmp_tables,
+          SUM_SELECT_FULL_JOIN AS full_joins,
+          SUM_SELECT_SCAN AS full_scans,
+          SUM_SORT_ROWS AS sort_rows,
+          SUM_NO_INDEX_USED AS no_index_used,
+          SUM_NO_GOOD_INDEX_USED AS no_good_index_used,
+          FIRST_SEEN,
+          LAST_SEEN,
+          -- Efficiency score (lower is worse)
+          CASE 
+            WHEN SUM_ROWS_SENT > 0 
+            THEN ROUND(SUM_ROWS_EXAMINED / SUM_ROWS_SENT, 2)
+            ELSE 0 
+          END AS rows_examined_ratio
+        FROM performance_schema.events_statements_summary_by_digest
+        WHERE DIGEST_TEXT IS NOT NULL
+          AND SCHEMA_NAME NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+        ORDER BY total_time_sec DESC
+        LIMIT 100
+      `;
+      return await this.executeQuery(query);
+    } catch (error) {
+      this.logger.warn('Failed to get slow query analysis', error);
+      return [];
+    }
+  }
+
+  /**
+   * Detect missing indexes by analyzing query patterns
+   */
+  async detectMissingIndexes(): Promise<any[]> {
+    try {
+      // Queries with no index or bad index usage
+      const query = `
+        SELECT 
+          DIGEST_TEXT,
+          COUNT_STAR AS execution_count,
+          SUM_NO_INDEX_USED AS no_index_count,
+          SUM_NO_GOOD_INDEX_USED AS bad_index_count,
+          SUM_ROWS_EXAMINED AS total_rows_examined,
+          SUM_ROWS_SENT AS total_rows_sent,
+          ROUND(SUM_TIMER_WAIT / 1000000000000, 4) AS total_time_sec
+        FROM performance_schema.events_statements_summary_by_digest
+        WHERE (SUM_NO_INDEX_USED > 0 OR SUM_NO_GOOD_INDEX_USED > 0)
+          AND DIGEST_TEXT IS NOT NULL
+          AND SCHEMA_NAME NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+        ORDER BY total_time_sec DESC
+        LIMIT 50
+      `;
+      return await this.executeQuery(query);
+    } catch (error) {
+      this.logger.warn('Failed to detect missing indexes', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get foreign key information
+   */
+  async getForeignKeys(): Promise<any[]> {
+    const query = `
+      SELECT 
+        CONSTRAINT_SCHEMA,
+        TABLE_NAME,
+        CONSTRAINT_NAME,
+        COLUMN_NAME,
+        REFERENCED_TABLE_SCHEMA,
+        REFERENCED_TABLE_NAME,
+        REFERENCED_COLUMN_NAME
+      FROM information_schema.KEY_COLUMN_USAGE
+      WHERE REFERENCED_TABLE_NAME IS NOT NULL
+        AND CONSTRAINT_SCHEMA NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+      ORDER BY CONSTRAINT_SCHEMA, TABLE_NAME, CONSTRAINT_NAME
+    `;
+    
+    return await this.executeQuery(query);
+  }
+
+  /**
+   * Get lock and wait statistics
+   */
+  async getLockStats(): Promise<any> {
+    try {
+      const tableWaits = await this.executeQuery(`
+        SELECT 
+          OBJECT_SCHEMA,
+          OBJECT_NAME,
+          COUNT_STAR AS wait_count,
+          ROUND(SUM_TIMER_WAIT / 1000000000000, 4) AS total_wait_sec,
+          ROUND(AVG_TIMER_WAIT / 1000000000000, 6) AS avg_wait_sec
+        FROM performance_schema.table_lock_waits_summary_by_table
+        WHERE OBJECT_SCHEMA NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+        ORDER BY total_wait_sec DESC
+        LIMIT 20
+      `);
+
+      return { tableWaits };
+    } catch (error) {
+      this.logger.warn('Failed to get lock stats', error);
+      return { tableWaits: [] };
+    }
   }
 }

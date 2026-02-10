@@ -21,8 +21,7 @@ services:
     environment:
       NODE_ENV: development
       NEXT_PUBLIC_API_BASE_URL: http://localhost:3001
+      API_BASE_URL: http://saas-api:3001
+      API_SECRET: ${API_SECRET}
+      TENANT_ID: ${TENANT_ID}
     command: npm run dev
-
-  postgres:
-    ports:
-      - "5432:5432"

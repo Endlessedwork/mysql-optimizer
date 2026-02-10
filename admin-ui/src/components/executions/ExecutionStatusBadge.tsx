@@ -1,11 +1,12 @@
 import { Badge } from '@/components/ui/Badge';
+import type { BadgeVariant } from '@/components/ui/Badge';
 
 interface ExecutionStatusBadgeProps {
   status: string;
 }
 
 export const ExecutionStatusBadge = ({ status }: ExecutionStatusBadgeProps) => {
-  let variant = 'default';
+  let variant: BadgeVariant = 'default';
   let text = status;
 
   switch (status) {

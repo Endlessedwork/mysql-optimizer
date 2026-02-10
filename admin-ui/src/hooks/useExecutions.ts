@@ -1,34 +1,37 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { getExecutions, getExecution } from '@/lib/api-client';
 import { Execution, ExecutionFilter } from '@/lib/types';
 
 export const useExecutions = (filters?: ExecutionFilter) => {
-  const [executions, setExecutions] = useState<Execution[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [data, setData] = useState<Execution[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const fetchExecutions = async () => {
-      try {
-        setLoading(true);
-        const response = await getExecutions();
-        if (!response.ok) {
-          throw new Error(response.error || 'Failed to fetch executions');
-        }
-        setExecutions(response.data || []);
-        setError(null);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch executions');
-        console.error('Error fetching executions:', err);
-      } finally {
-        setLoading(false);
+  const fetchExecutions = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const response = await getExecutions(
+        filters?.connectionId || undefined,
+        filters?.status || undefined
+      );
+      if (!response.ok) {
+        throw new Error(response.error || 'Failed to fetch executions');
       }
-    };
+      setData(response.data || []);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to fetch executions');
+      console.error('Error fetching executions:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [filters?.connectionId, filters?.status]);
 
+  useEffect(() => {
     fetchExecutions();
-  }, [filters]);
+  }, [fetchExecutions]);
 
-  return { executions, loading, error };
+  return { data, isLoading, error, refetch: fetchExecutions };
 };
 
 export const useExecution = (id: string) => {

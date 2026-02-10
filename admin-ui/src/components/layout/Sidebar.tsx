@@ -1,47 +1,176 @@
-import React from 'react';
+'use client';
+
+import React, { useState } from 'react';
+import Link from 'next/link';
+import { usePathname, useRouter } from 'next/navigation';
+import {
+  LayoutDashboard,
+  Database,
+  Lightbulb,
+  Play,
+  ShieldOff,
+  LogOut,
+  ChevronLeft,
+  User,
+  Search,
+} from 'lucide-react';
+
+interface NavItem {
+  name: string;
+  href: string;
+  icon: React.ElementType;
+}
+
+const navItems: NavItem[] = [
+  { name: 'Dashboard', href: '/admin', icon: LayoutDashboard },
+  { name: 'Connections', href: '/admin/connections', icon: Database },
+  { name: 'Scans', href: '/admin/scans', icon: Search },
+  { name: 'Recommendations', href: '/admin/recommendations', icon: Lightbulb },
+  { name: 'Executions', href: '/admin/executions', icon: Play },
+  { name: 'Kill Switch', href: '/admin/kill-switch', icon: ShieldOff },
+];
 
 interface SidebarProps {
   className?: string;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ className = '' }) => {
-  const menuItems = [
-    { name: 'Dashboard', href: '/admin' },
-    { name: 'Connections', href: '/admin/connections' },
-    { name: 'Recommendations', href: '/admin/recommendations' },
-    { name: 'Executions', href: '/admin/executions' },
-    { name: 'Kill Switch', href: '/admin/kill-switch' },
-  ];
+  const pathname = usePathname();
+  const router = useRouter();
+  const [expanded, setExpanded] = useState(false);
+
+  const isActive = (href: string) => {
+    if (href === '/admin') {
+      return pathname === '/admin';
+    }
+    return pathname.startsWith(href);
+  };
+
+  const handleLogout = () => {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('auth');
+      localStorage.removeItem('user');
+      document.cookie.split(';').forEach((c) => {
+        document.cookie = c
+          .replace(/^ +/, '')
+          .replace(/=.*/, '=;expires=' + new Date().toUTCString() + ';path=/');
+      });
+    }
+    router.push('/');
+  };
 
   return (
-    <div className={`w-64 bg-white shadow-md ${className}`}>
-      <div className="p-4 border-b">
-        <h1 className="text-xl font-bold text-gray-800">Admin Panel</h1>
+    <aside
+      className={`
+        ${expanded ? 'w-56' : 'w-16'}
+        bg-sidebar border-r border-default flex flex-col h-screen
+        transition-all duration-200 ease-in-out
+        ${className}
+      `}
+    >
+      {/* Logo + Toggle */}
+      <div className={`h-14 flex items-center border-b border-default ${expanded ? 'justify-between px-3' : 'justify-center'}`}>
+        {expanded ? (
+          <>
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-teal-600 flex items-center justify-center shrink-0">
+                <Database className="w-4 h-4 text-white" />
+              </div>
+              <span className="font-semibold text-slate-900 text-sm whitespace-nowrap">
+                MySQL Optimizer
+              </span>
+            </div>
+            <button
+              onClick={() => setExpanded(false)}
+              className="w-6 h-6 rounded flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={() => setExpanded(true)}
+            className="w-10 h-10 rounded-lg bg-teal-600 flex items-center justify-center text-white hover:bg-teal-700 transition-colors"
+          >
+            <Database className="w-5 h-5" />
+          </button>
+        )}
       </div>
-      <nav className="p-4">
-        <ul className="space-y-2">
-          {menuItems.map((item) => {
+
+      {/* Navigation */}
+      <nav className="flex-1 py-4 px-3 overflow-y-auto">
+        <ul className="space-y-1">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const active = isActive(item.href);
             return (
-              <li key={item.name}>
-                <a
+              <li key={item.name} className="group relative">
+                <Link
                   href={item.href}
-                  className="flex items-center p-2 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors"
+                  className={`
+                    flex items-center gap-3 px-3 h-10 rounded-lg
+                    transition-colors
+                    ${
+                      active
+                        ? 'bg-teal-600 text-white'
+                        : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
+                    }
+                  `}
                 >
-                  <span className="w-5 h-5 mr-3 bg-gray-300 rounded" />
-                  {item.name}
-                </a>
+                  <Icon className="w-5 h-5 shrink-0" />
+                  {expanded && (
+                    <span className="text-sm font-medium whitespace-nowrap">
+                      {item.name}
+                    </span>
+                  )}
+                </Link>
+                {/* Tooltip - only show when collapsed */}
+                {!expanded && (
+                  <span className="tooltip">{item.name}</span>
+                )}
               </li>
             );
           })}
         </ul>
       </nav>
-      <div className="absolute bottom-0 w-64 p-4 border-t">
-        <button className="flex items-center p-2 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors">
-          <span className="w-5 h-5 mr-3 bg-gray-300 rounded" />
-          Logout
+
+      {/* User Section */}
+      <div className={`border-t border-default p-3 space-y-1 ${!expanded ? 'flex flex-col items-center' : ''}`}>
+        {/* User Info */}
+        <div
+          className={`
+            flex items-center rounded-lg
+            ${expanded ? 'gap-3 px-3 py-2 bg-slate-50 w-full' : 'justify-center p-2'}
+          `}
+        >
+          <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center shrink-0">
+            <User className="w-4 h-4 text-slate-500" />
+          </div>
+          {expanded && (
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-slate-900 truncate">Admin</p>
+              <p className="text-xs text-slate-500 truncate">Administrator</p>
+            </div>
+          )}
+        </div>
+
+        {/* Logout Button */}
+        <button
+          onClick={handleLogout}
+          className={`
+            flex items-center rounded-lg
+            text-slate-500 hover:text-red-600 hover:bg-red-50
+            transition-colors
+            ${expanded ? 'gap-3 w-full px-3 h-10' : 'justify-center w-10 h-10'}
+          `}
+        >
+          <LogOut className="w-5 h-5 shrink-0" />
+          {expanded && (
+            <span className="text-sm font-medium">Logout</span>
+          )}
         </button>
       </div>
-    </div>
+    </aside>
   );
 };
 

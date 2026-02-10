@@ -9,6 +9,18 @@ export const MetricsComparison = ({ execution }: MetricsComparisonProps) => {
   const baseline = execution.baselineMetrics;
   const after = execution.afterMetrics;
 
+  // ถ้าไม่มี metrics ให้แสดงข้อความแจ้งเตือน
+  if (!baseline || !after) {
+    return (
+      <Card className="p-4">
+        <h3 className="text-lg font-semibold mb-4">Metrics Comparison</h3>
+        <p className="text-slate-500 text-center py-4">
+          Metrics data is not available yet.
+        </p>
+      </Card>
+    );
+  }
+
   // คำนวณการเปลี่ยนแปลง
   const queryTimeChange = baseline.queryTime - after.queryTime;
   const rowsExaminedChange = baseline.rowsExamined - after.rowsExamined;

@@ -3,6 +3,7 @@ import { Database } from '../database';
 export interface Recommendation {
   id: string;
   connectionId: string;
+  connectionName?: string;
   status: 'pending' | 'approved' | 'rejected' | 'scheduled' | 'executed';
   createdAt: string;
   updatedAt: string;
@@ -12,51 +13,101 @@ export interface Recommendation {
 
 export const getRecommendations = async (filters: { connectionId?: string; status?: string }): Promise<Recommendation[]> => {
   let query = `
-    SELECT 
+    SELECT
       rp.id,
-      rp.scan_run_id as "connectionId",
+      sr.connection_profile_id as "connectionId",
+      cp.name as "connectionName",
+      cp.database_name as "databaseName",
       COALESCE(a.status, 'pending') as status,
       rp.created_at as "createdAt",
       rp.generated_at as "updatedAt",
       a.approved_at as "scheduledAt",
-      a.rejection_reason as reason
+      a.rejection_reason as reason,
+      rp.recommendations as "rawRecommendations",
+      jsonb_array_length(rp.recommendations) as "totalCount"
     FROM recommendation_packs rp
     LEFT JOIN approvals a ON a.recommendation_pack_id = rp.id
+    LEFT JOIN scan_runs sr ON sr.id = rp.scan_run_id
+    LEFT JOIN connection_profiles cp ON cp.id = sr.connection_profile_id
   `;
-  
+
   const conditions: string[] = [];
   const params: any[] = [];
   let paramIndex = 1;
-  
+
   if (filters.connectionId) {
-    conditions.push(`rp.scan_run_id = $${paramIndex}`);
+    conditions.push(`sr.connection_profile_id = $${paramIndex}`);
     params.push(filters.connectionId);
     paramIndex++;
   }
-  
+
   if (filters.status) {
     conditions.push(`COALESCE(a.status, 'pending') = $${paramIndex}`);
     params.push(filters.status);
     paramIndex++;
   }
-  
+
   if (conditions.length > 0) {
     query += ' WHERE ' + conditions.join(' AND ');
   }
-  
+
   query += ' ORDER BY rp.created_at DESC';
-  
+
   const result = await Database.query<any>(query, params);
-  
-  return result.rows.map(row => ({
-    id: row.id,
-    connectionId: row.connectionId,
-    status: row.status || 'pending',
-    createdAt: row.createdAt?.toISOString() || row.createdAt,
-    updatedAt: row.updatedAt?.toISOString() || row.updatedAt,
-    scheduledAt: row.scheduledAt?.toISOString() || row.scheduledAt,
-    reason: row.reason
-  }));
+
+  return result.rows.map(row => {
+    const recs = row.rawRecommendations || [];
+
+    // Count by severity
+    const severityCounts = {
+      critical: 0,
+      high: 0,
+      medium: 0,
+      low: 0
+    };
+
+    // Count by type and get affected tables
+    const typeCounts: Record<string, number> = {};
+    const affectedTables = new Set<string>();
+
+    for (const rec of recs) {
+      const severity = rec.severity || 'medium';
+      if (severity in severityCounts) {
+        severityCounts[severity as keyof typeof severityCounts]++;
+      }
+
+      const type = rec.problem_statement || 'unknown';
+      typeCounts[type] = (typeCounts[type] || 0) + 1;
+
+      if (rec.table) {
+        affectedTables.add(rec.table);
+      }
+    }
+
+    // Get top issues
+    const topIssues = Object.entries(typeCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([type, count]) => ({ type, count }));
+
+    return {
+      id: row.id,
+      connectionId: row.connectionId,
+      connectionName: row.connectionName,
+      databaseName: row.databaseName,
+      status: row.status || 'pending',
+      createdAt: row.createdAt?.toISOString() || row.createdAt,
+      updatedAt: row.updatedAt?.toISOString() || row.updatedAt,
+      scheduledAt: row.scheduledAt?.toISOString() || row.scheduledAt,
+      reason: row.reason,
+      // Summary stats for dev view
+      totalCount: row.totalCount || 0,
+      severityCounts,
+      topIssues,
+      affectedTablesCount: affectedTables.size,
+      affectedTables: Array.from(affectedTables).slice(0, 10)
+    };
+  });
 };
 
 export const getRecommendationById = async (id: string): Promise<Recommendation | null> => {
@@ -91,28 +142,55 @@ export const getRecommendationById = async (id: string): Promise<Recommendation 
   };
 };
 
-export const approveRecommendation = async (id: string): Promise<Recommendation | null> => {
+export interface ApproveResult extends Recommendation {
+  approvalId?: string;
+  executionId?: string;
+}
+
+export const approveRecommendation = async (id: string): Promise<ApproveResult | null> => {
   // Check if recommendation exists and is pending
   const existing = await getRecommendationById(id);
   if (!existing || existing.status !== 'pending') {
     return null;
   }
   
-  // Create or update approval
-  const result = await Database.query<any>(
-    `INSERT INTO approvals (id, recommendation_pack_id, status, approved_at, created_at)
-    VALUES (gen_random_uuid(), $1, 'approved', NOW(), NOW())
-    ON CONFLICT (recommendation_pack_id) 
-    DO UPDATE SET status = 'approved', approved_at = NOW()
-    RETURNING id`,
+  let approvalId: string;
+  
+  // Check if approval already exists
+  const existingApproval = await Database.query<any>(
+    `SELECT id FROM approvals WHERE recommendation_pack_id = $1`,
     [id]
   );
   
-  if (result.rows.length === 0) {
-    return null;
+  if (existingApproval.rows.length > 0) {
+    // Update existing approval
+    await Database.query<any>(
+      `UPDATE approvals SET status = 'approved', approved_at = NOW() WHERE recommendation_pack_id = $1`,
+      [id]
+    );
+    approvalId = existingApproval.rows[0].id;
+  } else {
+    // Create new approval
+    const approvalResult = await Database.query<any>(
+      `INSERT INTO approvals (id, recommendation_pack_id, status, approved_at, created_at)
+      VALUES (gen_random_uuid(), $1, 'approved', NOW(), NOW())
+      RETURNING id`,
+      [id]
+    );
+    approvalId = approvalResult.rows[0].id;
   }
   
-  return getRecommendationById(id);
+  // Auto-create execution record for the Agent to pick up
+  const executionResult = await Database.query<any>(
+    `INSERT INTO execution_history (approval_id, execution_status, created_at)
+    VALUES ($1, 'pending', NOW())
+    RETURNING id`,
+    [approvalId]
+  );
+  const executionId = executionResult.rows[0].id;
+  
+  const result = await getRecommendationById(id);
+  return result ? { ...result, approvalId, executionId } : null;
 };
 
 export const scheduleRecommendation = async (id: string, scheduledAt: string, reason?: string): Promise<Recommendation | null> => {
@@ -140,14 +218,109 @@ export const rejectRecommendation = async (id: string, reason?: string): Promise
     return null;
   }
   
-  // Create or update approval as rejected
-  await Database.query<any>(
-    `INSERT INTO approvals (id, recommendation_pack_id, status, rejection_reason, created_at)
-    VALUES (gen_random_uuid(), $1, 'rejected', $2, NOW())
-    ON CONFLICT (recommendation_pack_id) 
-    DO UPDATE SET status = 'rejected', rejection_reason = $2`,
-    [id, reason]
+  // Check if approval already exists
+  const existingApproval = await Database.query<any>(
+    `SELECT id FROM approvals WHERE recommendation_pack_id = $1`,
+    [id]
   );
   
+  if (existingApproval.rows.length > 0) {
+    // Update existing approval
+    await Database.query<any>(
+      `UPDATE approvals SET status = 'rejected', rejection_reason = $2 WHERE recommendation_pack_id = $1`,
+      [id, reason]
+    );
+  } else {
+    // Create new rejection
+    await Database.query<any>(
+      `INSERT INTO approvals (id, recommendation_pack_id, status, rejection_reason, created_at)
+      VALUES (gen_random_uuid(), $1, 'rejected', $2, NOW())`,
+      [id, reason]
+    );
+  }
+  
   return getRecommendationById(id);
+};
+
+export interface RecommendationPackInput {
+  scanRunId: string;
+  tenantId: string;
+  recommendations: any[]; // Array of recommendation objects from Agent
+}
+
+export interface RecommendationPackDetail {
+  id: string;
+  scanRunId: string;
+  tenantId: string;
+  recommendations: any[];
+  generatedAt: string;
+  createdAt: string;
+  status: string;
+  approvalId?: string;
+  connectionId?: string;
+  connectionName?: string;
+  databaseName?: string;
+}
+
+export const createRecommendationPack = async (input: RecommendationPackInput): Promise<RecommendationPackDetail> => {
+  const result = await Database.query<any>(
+    `INSERT INTO recommendation_packs (scan_run_id, tenant_id, recommendations, generated_at)
+    VALUES ($1, $2, $3, NOW())
+    RETURNING id, scan_run_id as "scanRunId", tenant_id as "tenantId", recommendations, 
+      generated_at as "generatedAt", created_at as "createdAt"`,
+    [input.scanRunId, input.tenantId, JSON.stringify(input.recommendations)]
+  );
+  
+  const row = result.rows[0];
+  return {
+    id: row.id,
+    scanRunId: row.scanRunId,
+    tenantId: row.tenantId,
+    recommendations: row.recommendations,
+    generatedAt: row.generatedAt?.toISOString() || row.generatedAt,
+    createdAt: row.createdAt?.toISOString() || row.createdAt,
+    status: 'pending'
+  };
+};
+
+export const getRecommendationPackDetail = async (id: string): Promise<RecommendationPackDetail | null> => {
+  const result = await Database.query<any>(
+    `SELECT
+      rp.id,
+      rp.scan_run_id as "scanRunId",
+      rp.tenant_id as "tenantId",
+      rp.recommendations,
+      rp.generated_at as "generatedAt",
+      rp.created_at as "createdAt",
+      COALESCE(a.status, 'pending') as status,
+      a.id as "approvalId",
+      sr.connection_profile_id as "connectionId",
+      cp.name as "connectionName",
+      cp.database_name as "databaseName"
+    FROM recommendation_packs rp
+    LEFT JOIN approvals a ON a.recommendation_pack_id = rp.id
+    LEFT JOIN scan_runs sr ON sr.id = rp.scan_run_id
+    LEFT JOIN connection_profiles cp ON cp.id = sr.connection_profile_id
+    WHERE rp.id = $1`,
+    [id]
+  );
+
+  if (result.rows.length === 0) {
+    return null;
+  }
+
+  const row = result.rows[0];
+  return {
+    id: row.id,
+    scanRunId: row.scanRunId,
+    tenantId: row.tenantId,
+    recommendations: row.recommendations,
+    generatedAt: row.generatedAt?.toISOString() || row.generatedAt,
+    createdAt: row.createdAt?.toISOString() || row.createdAt,
+    status: row.status,
+    approvalId: row.approvalId,
+    connectionId: row.connectionId,
+    connectionName: row.connectionName,
+    databaseName: row.databaseName
+  };
 };

@@ -4,7 +4,7 @@ import { RecommendationDetail } from '@/lib/types';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { RiskWarning } from '@/components/ui/RiskWarning';
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useApproveRecommendation, useScheduleRecommendation, useRejectRecommendation } from '@/hooks/useRecommendations';
 
 interface RecommendationActionsProps {
@@ -15,6 +15,7 @@ export const RecommendationActions = ({ recommendation }: RecommendationActionsP
   const [showApproveConfirm, setShowApproveConfirm] = useState(false);
   const [showScheduleDialog, setShowScheduleDialog] = useState(false);
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
+  const scheduleDateRef = useRef<HTMLInputElement>(null);
   
   const approveMutation = useApproveRecommendation();
   const scheduleMutation = useScheduleRecommendation();
@@ -66,21 +67,21 @@ export const RecommendationActions = ({ recommendation }: RecommendationActionsP
           <Button 
             variant="primary" 
             onClick={() => setShowApproveConfirm(true)}
-            disabled={recommendation.status !== 'pending' || approveMutation.isLoading}
+            disabled={recommendation.status !== 'pending' || approveMutation.isPending}
           >
             Approve
           </Button>
           <Button 
             variant="secondary" 
             onClick={() => setShowScheduleDialog(true)}
-            disabled={recommendation.status !== 'pending' || scheduleMutation.isLoading}
+            disabled={recommendation.status !== 'pending' || scheduleMutation.isPending}
           >
             Schedule
           </Button>
           <Button 
             variant="danger" 
             onClick={() => setShowRejectConfirm(true)}
-            disabled={recommendation.status !== 'pending' || rejectMutation.isLoading}
+            disabled={recommendation.status !== 'pending' || rejectMutation.isPending}
           >
             Reject
           </Button>
@@ -93,10 +94,10 @@ export const RecommendationActions = ({ recommendation }: RecommendationActionsP
           onConfirm={handleApprove}
           title="Approve Recommendation"
           confirmText="Approve"
-          isLoading={approveMutation.isLoading}
+          isLoading={approveMutation.isPending}
         >
           <RiskWarning 
-            title="Risk Warning"
+            level="high"
             message="This action will execute the index creation immediately. Please ensure you understand the impact before proceeding."
           />
           <p className="mt-4">Are you sure you want to approve this recommendation?</p>
@@ -106,21 +107,20 @@ export const RecommendationActions = ({ recommendation }: RecommendationActionsP
         <ConfirmDialog
           isOpen={showScheduleDialog}
           onClose={() => setShowScheduleDialog(false)}
-          onConfirm={(e) => {
-            e.preventDefault();
-            const form = e.target as HTMLFormElement;
-            const scheduledAt = (form.elements.namedItem('scheduledAt') as HTMLInputElement)?.value;
+          onConfirm={() => {
+            const scheduledAt = scheduleDateRef.current?.value;
             if (scheduledAt) {
               handleSchedule(scheduledAt);
             }
           }}
           title="Schedule Recommendation"
           confirmText="Schedule"
-          isLoading={scheduleMutation.isLoading}
+          isLoading={scheduleMutation.isPending}
         >
           <p className="mb-4">Select a date and time to schedule this recommendation:</p>
-          <form>
+          <form onSubmit={(e) => e.preventDefault()}>
             <input 
+              ref={scheduleDateRef}
               type="datetime-local" 
               name="scheduledAt"
               className="border rounded-md p-2 w-full"
@@ -137,7 +137,7 @@ export const RecommendationActions = ({ recommendation }: RecommendationActionsP
           title="Reject Recommendation"
           confirmText="Reject"
           variant="danger"
-          isLoading={rejectMutation.isLoading}
+          isLoading={rejectMutation.isPending}
         >
           <p>Are you sure you want to reject this recommendation?</p>
         </ConfirmDialog>

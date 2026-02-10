@@ -9,10 +9,12 @@ interface ConfirmDialogProps {
   onClose: () => void;
   onConfirm: () => void;
   title: string;
-  description: string;
+  description?: string;
   confirmText?: string;
   variant?: 'danger' | 'warning' | 'info';
   riskWarning?: string;
+  isLoading?: boolean;
+  children?: React.ReactNode;
 }
 
 const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
@@ -23,7 +25,9 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   description,
   confirmText = 'Confirm',
   variant = 'info',
-  riskWarning
+  riskWarning,
+  isLoading = false,
+  children,
 }) => {
   const getVariantClasses = () => {
     switch (variant) {
@@ -83,9 +87,7 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
                   {title}
                 </Dialog.Title>
                 <div className="mt-2">
-                  <p className="text-sm text-gray-500">
-                    {description}
-                  </p>
+                  {children ?? (description != null ? <p className="text-sm text-gray-500">{description}</p> : null)}
                   {riskWarning && (
                     <div className={`mt-3 p-3 rounded-lg border ${getVariantClasses()}`}>
                       <div className="flex">
@@ -108,7 +110,8 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
                   </button>
                   <button
                     type="button"
-                    className={`inline-flex justify-center rounded-md border border-transparent px-4 py-2 text-sm font-medium text-white focus:outline-none ${getConfirmButtonClasses()}`}
+                    disabled={isLoading}
+                    className={`inline-flex justify-center rounded-md border border-transparent px-4 py-2 text-sm font-medium text-white focus:outline-none disabled:opacity-50 ${getConfirmButtonClasses()}`}
                     onClick={onConfirm}
                   >
                     {confirmText}
@@ -124,3 +127,4 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
 };
 
 export default ConfirmDialog;
+export { ConfirmDialog };

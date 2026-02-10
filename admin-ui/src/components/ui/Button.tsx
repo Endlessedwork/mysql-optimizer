@@ -1,67 +1,65 @@
 import React from 'react';
-import LoadingSpinner from './LoadingSpinner';
+import { Loader2 } from 'lucide-react';
 
-interface ButtonProps {
-  variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
-  size?: 'sm' | 'md' | 'lg';
-  disabled?: boolean;
+type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'ghost';
+type ButtonSize = 'sm' | 'md' | 'lg';
+
+interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: ButtonVariant;
+  size?: ButtonSize;
   loading?: boolean;
+  icon?: React.ReactNode;
   children: React.ReactNode;
-  onClick?: () => void;
-  className?: string;
 }
 
-const Button: React.FC<ButtonProps> = ({ 
-  variant = 'primary', 
-  size = 'md', 
-  disabled = false, 
+const variantClasses: Record<ButtonVariant, string> = {
+  primary: 'bg-teal-600 text-white hover:bg-teal-700 focus:ring-teal-500',
+  secondary: 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50 focus:ring-slate-500',
+  danger: 'bg-red-600 text-white hover:bg-red-700 focus:ring-red-500',
+  ghost: 'bg-transparent text-teal-600 hover:text-teal-700 hover:bg-teal-50 focus:ring-teal-500',
+};
+
+const sizeClasses: Record<ButtonSize, string> = {
+  sm: 'h-8 px-3 text-xs',
+  md: 'h-10 px-4 text-sm',
+  lg: 'h-12 px-6 text-base',
+};
+
+const Button: React.FC<ButtonProps> = ({
+  variant = 'primary',
+  size = 'md',
   loading = false,
-  children, 
-  onClick,
-  className = ''
+  icon,
+  children,
+  disabled,
+  className = '',
+  ...props
 }) => {
-  const getVariantClasses = () => {
-    switch (variant) {
-      case 'primary':
-        return 'bg-blue-600 hover:bg-blue-700 text-white';
-      case 'secondary':
-        return 'bg-gray-200 hover:bg-gray-300 text-gray-800';
-      case 'danger':
-        return 'bg-red-600 hover:bg-red-700 text-white';
-      case 'ghost':
-      default:
-        return 'bg-transparent hover:bg-gray-100 text-gray-800';
-    }
-  };
-
-  const getSizeClasses = () => {
-    switch (size) {
-      case 'sm':
-        return 'px-3 py-1.5 text-sm';
-      case 'lg':
-        return 'px-6 py-3 text-lg';
-      case 'md':
-      default:
-        return 'px-4 py-2 text-base';
-    }
-  };
-
-  const baseClasses = 'inline-flex items-center justify-center font-medium rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed';
-
   return (
     <button
-      className={`${baseClasses} ${getVariantClasses()} ${getSizeClasses()} ${className}`}
+      className={`
+        inline-flex items-center justify-center gap-2
+        font-medium rounded-lg
+        transition-all duration-150
+        focus:outline-none focus:ring-2 focus:ring-offset-2
+        disabled:opacity-50 disabled:cursor-not-allowed
+        ${variantClasses[variant]}
+        ${sizeClasses[size]}
+        ${className}
+      `}
       disabled={disabled || loading}
-      onClick={onClick}
+      {...props}
     >
-      {loading && (
-        <span className="mr-2">
-          <LoadingSpinner size="sm" />
-        </span>
-      )}
+      {loading ? (
+        <Loader2 className="w-4 h-4 animate-spin" />
+      ) : icon ? (
+        <span className="shrink-0">{icon}</span>
+      ) : null}
       {children}
     </button>
   );
 };
 
 export default Button;
+export { Button };
+export type { ButtonProps, ButtonVariant, ButtonSize };

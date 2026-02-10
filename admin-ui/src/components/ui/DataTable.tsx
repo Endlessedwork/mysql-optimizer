@@ -1,10 +1,12 @@
 import React from 'react';
-import LoadingSpinner from './LoadingSpinner';
+import { Loader2, Inbox } from 'lucide-react';
 
 interface Column<T> {
   key: string;
   title: string;
-  render?: (value: T, row: T) => React.ReactNode;
+  width?: string;
+  align?: 'left' | 'center' | 'right';
+  render?: (value: unknown, row: T) => React.ReactNode;
 }
 
 interface DataTableProps<T> {
@@ -12,60 +14,94 @@ interface DataTableProps<T> {
   data: T[];
   loading?: boolean;
   emptyMessage?: string;
+  emptyDescription?: string;
   onRowClick?: (row: T) => void;
 }
 
-const DataTable = <T,>({ 
-  columns, 
-  data, 
-  loading = false, 
+const DataTable = <T,>({
+  columns,
+  data,
+  loading = false,
   emptyMessage = 'No data available',
-  onRowClick 
+  emptyDescription = 'There are no items to display at this time.',
+  onRowClick,
 }: DataTableProps<T>) => {
   if (loading) {
     return (
-      <div className="flex justify-center items-center p-8">
-        <LoadingSpinner size="md" />
+      <div className="flex flex-col items-center justify-center py-16">
+        <Loader2 className="w-8 h-8 text-teal-600 animate-spin" />
+        <p className="mt-3 text-sm text-slate-500">Loading...</p>
       </div>
     );
   }
 
   if (!data || data.length === 0) {
     return (
-      <div className="text-center py-8 text-gray-500">
-        {emptyMessage}
+      <div className="flex flex-col items-center justify-center py-16">
+        <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mb-4">
+          <Inbox className="w-6 h-6 text-slate-400" />
+        </div>
+        <p className="text-base font-medium text-slate-900">{emptyMessage}</p>
+        <p className="mt-1 text-sm text-slate-500">{emptyDescription}</p>
       </div>
     );
   }
 
+  const getAlignClass = (align?: 'left' | 'center' | 'right') => {
+    switch (align) {
+      case 'center':
+        return 'text-center';
+      case 'right':
+        return 'text-right';
+      default:
+        return 'text-left';
+    }
+  };
+
   return (
     <div className="overflow-x-auto">
-      <table className="min-w-full divide-y divide-gray-200">
-        <thead className="bg-gray-50">
-          <tr>
+      <table className="min-w-full">
+        <thead>
+          <tr className="border-b border-slate-200">
             {columns.map((column) => (
-              <th 
+              <th
                 key={column.key}
-                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                className={`
+                  px-6 py-3
+                  text-xs font-medium text-slate-500 uppercase tracking-wider
+                  bg-slate-50
+                  ${getAlignClass(column.align)}
+                `}
+                style={column.width ? { width: column.width } : undefined}
               >
                 {column.title}
               </th>
             ))}
           </tr>
         </thead>
-        <tbody className="bg-white divide-y divide-gray-200">
+        <tbody>
           {data.map((row, index) => (
-            <tr 
-              key={index} 
-              className={onRowClick ? "hover:bg-gray-50 cursor-pointer" : ""}
-              onClick={() => onRowClick && onRowClick(row)}
+            <tr
+              key={index}
+              className={`
+                border-b border-slate-100
+                transition-colors
+                ${onRowClick ? 'hover:bg-slate-50 cursor-pointer' : ''}
+              `}
+              onClick={() => onRowClick?.(row)}
             >
               {columns.map((column) => (
-                <td 
-                  key={`${index}-${column.key}`} 
-                  className="px-6 py-4 whitespace-nowrap text-sm text-gray-500"
+                <td
+                  key={`${index}-${column.key}`}
+                  className={`
+                    px-6 py-4
+                    text-sm text-slate-700
+                    ${getAlignClass(column.align)}
+                  `}
                 >
-                  {column.render ? column.render(row[column.key as keyof T], row) : (row[column.key as keyof T] as React.ReactNode)}
+                  {column.render
+                    ? column.render(row[column.key as keyof T], row)
+                    : (row[column.key as keyof T] as React.ReactNode)}
                 </td>
               ))}
             </tr>
@@ -77,3 +113,5 @@ const DataTable = <T,>({
 };
 
 export default DataTable;
+export { DataTable };
+export type { Column, DataTableProps };

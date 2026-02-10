@@ -4,6 +4,7 @@ import recommendationsRoutes from './recommendations';
 import executionsRoutes from './executions';
 import killSwitchRoutes from './kill-switch';
 import auditRoutes from './audit';
+import scanRunsRoutes from './scan-runs';
 
 export default async function registerRoutes(fastify: FastifyInstance) {
   // Register all routes
@@ -12,4 +13,5 @@ export default async function registerRoutes(fastify: FastifyInstance) {
   await executionsRoutes(fastify);
   await killSwitchRoutes(fastify);
   await auditRoutes(fastify);
+  await scanRunsRoutes(fastify);
 }
