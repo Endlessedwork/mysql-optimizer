@@ -37,7 +37,7 @@ interface SidebarProps {
 const Sidebar: React.FC<SidebarProps> = ({ className = '' }) => {
   const pathname = usePathname();
   const router = useRouter();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
 
   const isActive = (href: string) => {
     if (href === '/admin') {

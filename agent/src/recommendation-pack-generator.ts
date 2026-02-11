@@ -410,7 +410,7 @@ export class RecommendationPackGenerator {
           options.push({
             id: 'analyze_query',
             description: 'วิเคราะห์และปรับปรุง query structure',
-            implementation: `-- วิเคราะห์ query pattern\nEXPLAIN FORMAT=JSON ${query.substring(0, 200) || 'SELECT ...'}...`,
+            implementation: `-- วิเคราะห์ query pattern\nEXPLAIN FORMAT=JSON ${query || 'SELECT ...'}`,
             is_multistep: false
           });
         }
@@ -478,7 +478,7 @@ export class RecommendationPackGenerator {
         options.push({
           id: 'analyze_slow_query',
           description: 'วิเคราะห์ slow query และเพิ่ม index ที่เหมาะสม',
-          implementation: `-- Step 1: ดู execution plan\nEXPLAIN FORMAT=JSON ${query.substring(0, 200) || 'SELECT ...'}...\n\n-- Step 2: ตรวจสอบ indexes ที่มี\nSHOW INDEX FROM ${tableName};\n\n-- Step 3: สร้าง index ตาม WHERE/JOIN columns`,
+          implementation: `-- Step 1: ดู execution plan\nEXPLAIN FORMAT=JSON ${query || 'SELECT ...'}\n\n-- Step 2: ตรวจสอบ indexes ที่มี\nSHOW INDEX FROM ${tableName};\n\n-- Step 3: สร้าง index ตาม WHERE/JOIN columns`,
           estimated_impact: `ลดเวลาจาก ${evidence.avg_time_sec || 'N/A'} seconds`,
           is_multistep: false
         });

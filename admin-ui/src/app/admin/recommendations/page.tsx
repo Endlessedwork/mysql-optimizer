@@ -8,7 +8,7 @@ import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Card } from '@/components/ui/Card';
 import { useRouter } from 'next/navigation';
-import { Lightbulb, RefreshCw, X, Database, AlertTriangle, AlertCircle, Info, CheckCircle2, Table2, FileCode2 } from 'lucide-react';
+import { Lightbulb, RefreshCw, X, Database, AlertTriangle, AlertCircle, Info, CheckCircle2, Table2, FileCode2, Archive } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 
 type StatusFilter = 'all' | 'pending' | 'approved' | 'scheduled' | 'executed' | 'failed';
@@ -18,6 +18,7 @@ export default function RecommendationsPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [connectionFilter, setConnectionFilter] = useState<string | null>(null);
   const [connectionFilterName, setConnectionFilterName] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
 
   const { data: connections } = useConnections();
   const {
@@ -25,7 +26,7 @@ export default function RecommendationsPage() {
     isLoading,
     isError,
     refetch,
-  } = useRecommendations(statusFilter, connectionFilter);
+  } = useRecommendations(statusFilter, connectionFilter, showArchived);
 
   // Create a map of connectionId -> connection name
   const connectionMap = useMemo(() => {
@@ -118,15 +119,30 @@ export default function RecommendationsPage() {
             Review and approve optimization suggestions from the Agent
           </p>
         </div>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => refetch()}
-          disabled={isLoading}
-          icon={<RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />}
-        >
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowArchived(!showArchived)}
+            className={`
+              flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg border transition-colors
+              ${showArchived
+                ? 'bg-amber-50 border-amber-200 text-amber-700'
+                : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+              }
+            `}
+          >
+            <Archive className="w-4 h-4" />
+            {showArchived ? 'Showing All' : 'Show History'}
+          </button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => refetch()}
+            disabled={isLoading}
+            icon={<RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />}
+          >
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* Summary Stats Cards */}

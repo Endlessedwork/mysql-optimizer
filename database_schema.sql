@@ -77,6 +77,7 @@ CREATE TABLE recommendation_packs (
     tenant_id UUID REFERENCES tenants(id),
     recommendations JSONB,
     generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    archived_at TIMESTAMP DEFAULT NULL, -- NULL = active, มีค่า = archived
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -128,6 +129,7 @@ CREATE INDEX idx_scan_runs_tenant_id ON scan_runs(tenant_id);
 CREATE INDEX idx_scan_runs_connection_profile_id ON scan_runs(connection_profile_id);
 CREATE INDEX idx_query_digests_scan_run_id ON query_digests(scan_run_id);
 CREATE INDEX idx_recommendation_packs_scan_run_id ON recommendation_packs(scan_run_id);
+CREATE INDEX idx_recommendation_packs_archived_at ON recommendation_packs(archived_at);
 CREATE INDEX idx_approvals_recommendation_pack_id ON approvals(recommendation_pack_id);
 CREATE INDEX idx_execution_history_approval_id ON execution_history(approval_id);
 CREATE INDEX idx_audit_logs_tenant_id ON audit_logs(tenant_id);

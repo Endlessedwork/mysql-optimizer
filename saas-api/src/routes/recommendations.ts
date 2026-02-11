@@ -64,15 +64,20 @@ export default async function recommendationsRoutes(fastify: FastifyInstance) {
         type: 'object',
         properties: {
           connectionId: { type: 'string' },
-          status: { type: 'string' }
+          status: { type: 'string' },
+          includeArchived: { type: 'string' }
         }
       }
       // Response schema removed to allow all fields
     }
   }, async (request, reply) => {
     try {
-      const { connectionId, status } = request.query as any;
-      const recommendations = await getRecommendations({ connectionId, status });
+      const { connectionId, status, includeArchived } = request.query as any;
+      const recommendations = await getRecommendations({
+        connectionId,
+        status,
+        includeArchived: includeArchived === 'true'
+      });
       return {
         success: true,
         data: recommendations

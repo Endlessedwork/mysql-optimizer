@@ -11,7 +11,7 @@ export interface Recommendation {
   reason?: string;
 }
 
-export const getRecommendations = async (filters: { connectionId?: string; status?: string }): Promise<Recommendation[]> => {
+export const getRecommendations = async (filters: { connectionId?: string; status?: string; includeArchived?: boolean }): Promise<Recommendation[]> => {
   let query = `
     SELECT
       rp.id,
@@ -24,7 +24,8 @@ export const getRecommendations = async (filters: { connectionId?: string; statu
       a.approved_at as "scheduledAt",
       a.rejection_reason as reason,
       rp.recommendations as "rawRecommendations",
-      jsonb_array_length(rp.recommendations) as "totalCount"
+      jsonb_array_length(rp.recommendations) as "totalCount",
+      rp.archived_at as "archivedAt"
     FROM recommendation_packs rp
     LEFT JOIN approvals a ON a.recommendation_pack_id = rp.id
     LEFT JOIN scan_runs sr ON sr.id = rp.scan_run_id
@@ -34,6 +35,11 @@ export const getRecommendations = async (filters: { connectionId?: string; statu
   const conditions: string[] = [];
   const params: any[] = [];
   let paramIndex = 1;
+
+  // By default, only show active (non-archived) packs
+  if (!filters.includeArchived) {
+    conditions.push('rp.archived_at IS NULL');
+  }
 
   if (filters.connectionId) {
     conditions.push(`sr.connection_profile_id = $${paramIndex}`);
@@ -263,14 +269,36 @@ export interface RecommendationPackDetail {
 }
 
 export const createRecommendationPack = async (input: RecommendationPackInput): Promise<RecommendationPackDetail> => {
+  // Get connection_profile_id from scan_run
+  const scanRunResult = await Database.query<any>(
+    `SELECT connection_profile_id FROM scan_runs WHERE id = $1`,
+    [input.scanRunId]
+  );
+
+  if (scanRunResult.rows.length > 0) {
+    const connectionId = scanRunResult.rows[0].connection_profile_id;
+
+    // Archive all existing active packs for this connection
+    await Database.query<any>(
+      `UPDATE recommendation_packs rp
+       SET archived_at = NOW()
+       FROM scan_runs sr
+       WHERE rp.scan_run_id = sr.id
+         AND sr.connection_profile_id = $1
+         AND rp.archived_at IS NULL`,
+      [connectionId]
+    );
+  }
+
+  // Create new pack (will be the only active one for this connection)
   const result = await Database.query<any>(
     `INSERT INTO recommendation_packs (scan_run_id, tenant_id, recommendations, generated_at)
     VALUES ($1, $2, $3, NOW())
-    RETURNING id, scan_run_id as "scanRunId", tenant_id as "tenantId", recommendations, 
+    RETURNING id, scan_run_id as "scanRunId", tenant_id as "tenantId", recommendations,
       generated_at as "generatedAt", created_at as "createdAt"`,
     [input.scanRunId, input.tenantId, JSON.stringify(input.recommendations)]
   );
-  
+
   const row = result.rows[0];
   return {
     id: row.id,

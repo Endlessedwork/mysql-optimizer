@@ -195,10 +195,11 @@ export async function getScanRun(id: string): Promise<ApiResponse<ScanRun>> {
   return apiFetch<ScanRun>(`/api/scan-runs/${id}`)
 }
 
-export async function getRecommendations(connectionId?: string, status?: string): Promise<ApiResponse<Recommendation[]>> {
+export async function getRecommendations(connectionId?: string, status?: string, includeArchived?: boolean): Promise<ApiResponse<Recommendation[]>> {
   const params = new URLSearchParams();
   if (connectionId) params.append('connectionId', connectionId);
   if (status && status !== 'all') params.append('status', status);
+  if (includeArchived) params.append('includeArchived', 'true');
   const queryString = params.toString() ? `?${params.toString()}` : '';
   return apiFetch<Recommendation[]>(`/api/recommendations${queryString}`)
 }

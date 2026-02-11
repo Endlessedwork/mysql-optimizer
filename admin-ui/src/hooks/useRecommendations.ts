@@ -11,14 +11,16 @@ import { Recommendation, RecommendationDetail } from '@/lib/types';
 // Fetch all recommendations with filters
 export const useRecommendations = (
   statusFilter: 'pending' | 'approved' | 'scheduled' | 'executed' | 'failed' | 'all' = 'all',
-  connectionFilter: string | null = null
+  connectionFilter: string | null = null,
+  includeArchived: boolean = false
 ) => {
   return useQuery<Recommendation[]>({
-    queryKey: ['recommendations', statusFilter, connectionFilter],
+    queryKey: ['recommendations', statusFilter, connectionFilter, includeArchived],
     queryFn: async () => {
       const response = await getRecommendations(
         connectionFilter || undefined,
-        statusFilter !== 'all' ? statusFilter : undefined
+        statusFilter !== 'all' ? statusFilter : undefined,
+        includeArchived
       );
       if (!response.ok) {
         throw new Error(response.error || 'Failed to fetch recommendations');
