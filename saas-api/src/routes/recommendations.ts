@@ -1,15 +1,59 @@
 import { FastifyInstance } from 'fastify';
 import { authenticate } from '../middleware/auth';
-import { 
-  getRecommendations, 
-  getRecommendationById, 
-  approveRecommendation, 
-  scheduleRecommendation, 
+import {
+  getRecommendations,
+  getRecommendationById,
+  approveRecommendation,
+  scheduleRecommendation,
   rejectRecommendation,
   createRecommendationPack,
   getRecommendationPackDetail,
   RecommendationPackInput
 } from '../models/recommendations.model';
+
+// SQL validation patterns - only allow safe DDL operations
+const ALLOWED_SQL_PATTERNS = [
+  /^CREATE\s+(UNIQUE\s+)?INDEX\s+/i,
+  /^DROP\s+INDEX\s+/i,
+  /^OPTIMIZE\s+TABLE\s+/i,
+  /^EXPLAIN\s+(ANALYZE\s+)?/i,
+  /^EXPLAIN\s+FORMAT\s*=\s*(JSON|TREE|TRADITIONAL)\s+/i,
+  /^SHOW\s+(INDEX|INDEXES|KEYS|CREATE\s+TABLE|TABLE\s+STATUS)\s+/i,
+  /^ANALYZE\s+TABLE\s+/i,
+  /^SELECT\s+.*\s+FROM\s+(performance_schema|information_schema)\./i,
+  /^--\s+.*$/i,  // SQL comments
+];
+
+// Step ID format validation
+const VALID_STEP_ID_PATTERN = /^step_\d+$/;
+
+/**
+ * Validates SQL to prevent injection attacks
+ * Only allows specific DDL patterns that are safe for index optimization
+ */
+function isValidOptimizationSQL(sql: string): boolean {
+  const trimmedSql = sql.trim();
+
+  // Empty SQL is not valid
+  if (!trimmedSql) return false;
+
+  // Check against allowed patterns
+  const isAllowed = ALLOWED_SQL_PATTERNS.some(pattern => pattern.test(trimmedSql));
+
+  if (!isAllowed) {
+    // Log blocked SQL for security audit
+    console.warn(`[SECURITY] Blocked SQL execution attempt: ${trimmedSql.substring(0, 100)}...`);
+  }
+
+  return isAllowed;
+}
+
+/**
+ * Validates step ID format
+ */
+function isValidStepId(stepId: string): boolean {
+  return VALID_STEP_ID_PATTERN.test(stepId);
+}
 
 export default async function recommendationsRoutes(fastify: FastifyInstance) {
   // GET /api/recommendations - List recommendations (with filters)
@@ -474,6 +518,14 @@ export default async function recommendationsRoutes(fastify: FastifyInstance) {
         });
       }
 
+      // Security: Validate SQL to prevent injection
+      if (!isValidOptimizationSQL(sql)) {
+        return reply.status(400).send({
+          success: false,
+          error: 'Invalid SQL statement. Only index optimization DDL (CREATE INDEX, DROP INDEX, OPTIMIZE TABLE, EXPLAIN) is allowed.'
+        });
+      }
+
       // Get recommendation pack detail
       const detail = await getRecommendationPackDetail(id);
       if (!detail) {
@@ -512,6 +564,140 @@ export default async function recommendationsRoutes(fastify: FastifyInstance) {
       return reply.status(500).send({
         success: false,
         error: 'Failed to queue fix execution'
+      });
+    }
+  });
+
+  // POST /api/recommendations/:id/execute-step - Execute a single step from a multi-step recommendation
+  fastify.post('/api/recommendations/:id/execute-step', {
+    preHandler: [authenticate],
+    schema: {
+      params: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' }
+        },
+        required: ['id']
+      },
+      body: {
+        type: 'object',
+        properties: {
+          recommendationIndex: { type: 'number' },
+          fixIndex: { type: 'number' },
+          stepId: { type: 'string' },
+          sql: { type: 'string' }
+        },
+        required: ['stepId', 'sql']
+      }
+    }
+  }, async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const { recommendationIndex = 0, fixIndex = 0, stepId, sql } = request.body as {
+        recommendationIndex?: number;
+        fixIndex?: number;
+        stepId: string;
+        sql: string;
+      };
+
+      // Validate SQL is not empty
+      if (!sql || sql.trim() === '') {
+        return reply.status(400).send({
+          success: false,
+          error: 'SQL statement is required'
+        });
+      }
+
+      // Security: Validate SQL to prevent injection
+      if (!isValidOptimizationSQL(sql)) {
+        return reply.status(400).send({
+          success: false,
+          error: 'Invalid SQL statement. Only index optimization DDL (CREATE INDEX, DROP INDEX, OPTIMIZE TABLE, EXPLAIN) is allowed.'
+        });
+      }
+
+      // Security: Validate stepId format
+      if (!isValidStepId(stepId)) {
+        return reply.status(400).send({
+          success: false,
+          error: 'Invalid step ID format. Must be step_N where N is a number.'
+        });
+      }
+
+      // Get recommendation pack detail
+      const detail = await getRecommendationPackDetail(id);
+      if (!detail) {
+        return reply.status(404).send({
+          success: false,
+          error: 'Recommendation pack not found'
+        });
+      }
+
+      // Check if connection profile exists
+      if (!detail.connectionId) {
+        return reply.status(400).send({
+          success: false,
+          error: 'Connection profile not found for this recommendation'
+        });
+      }
+
+      // Validate step exists in the recommendation
+      const recs = detail.recommendations || [];
+      const rec = recs[recommendationIndex];
+      if (!rec) {
+        return reply.status(404).send({
+          success: false,
+          error: `Recommendation at index ${recommendationIndex} not found`
+        });
+      }
+
+      const fixOption = rec.fix_options?.[fixIndex];
+      if (!fixOption || !fixOption.is_multistep || !fixOption.steps) {
+        return reply.status(400).send({
+          success: false,
+          error: 'Fix option is not a multi-step recommendation'
+        });
+      }
+
+      const step = fixOption.steps.find((s: any) => s.id === stepId);
+      if (!step) {
+        return reply.status(404).send({
+          success: false,
+          error: `Step ${stepId} not found in fix option`
+        });
+      }
+
+      // Check step is ready to execute
+      if (step.status !== 'ready' && step.status !== 'pending') {
+        return reply.status(400).send({
+          success: false,
+          error: `Step is already ${step.status}`
+        });
+      }
+
+      // Create an execution record for this step
+      const { createStepExecution } = await import('../models/executions.model');
+      const execution = await createStepExecution({
+        recommendationPackId: id,
+        connectionId: detail.connectionId,
+        recommendationIndex,
+        fixIndex,
+        stepId,
+        stepType: step.step_type,
+        sql,
+        tenantId: detail.tenantId
+      });
+
+      return reply.status(201).send({
+        success: true,
+        data: execution,
+        message: `Step ${stepId} execution queued. The agent will pick it up shortly.`
+      });
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({
+        success: false,
+        error: 'Failed to queue step execution'
       });
     }
   });

@@ -39,6 +39,65 @@ export type Recommendation = {
   affectedTables?: string[]
 }
 
+// Multi-step recommendation types
+export type StepType = 'explain_before' | 'execute_fix' | 'explain_after' | 'verify' | 'rollback';
+export type StepStatus = 'pending' | 'ready' | 'in_progress' | 'completed' | 'skipped' | 'failed';
+
+export type StepEvidence = {
+  collected_at: string
+  step_id: string
+  type: 'explain_result' | 'execution_result' | 'verification_result'
+  data: {
+    explain_json?: Record<string, any>
+    access_type?: string
+    rows_examined?: number
+    using_index?: boolean
+    using_filesort?: boolean
+    using_temporary?: boolean
+    affected_rows?: number
+    execution_time_ms?: number
+    warnings?: string[]
+    performance_change_percent?: number
+    success?: boolean
+    message?: string
+  }
+}
+
+export type RecommendationStep = {
+  id: string
+  step_number: number
+  step_type: StepType
+  label: string
+  description: string
+  sql: string
+  status: StepStatus
+  requires_step_id?: string
+  evidence?: StepEvidence
+  estimated_time_sec?: number
+  warning?: string
+  started_at?: string
+  completed_at?: string
+}
+
+export type FixOption = {
+  id: string
+  description: string
+  implementation?: string
+  rollback?: string
+  estimated_impact?: string
+  warning?: string
+  // Multi-step fields
+  is_multistep?: boolean
+  total_steps?: number
+  current_step?: number
+  steps?: RecommendationStep[]
+  roadmap?: {
+    title: string
+    summary: string
+    steps_preview: string[]
+  }
+}
+
 // Single recommendation item from agent
 export type RawRecommendation = {
   id: string
@@ -63,13 +122,7 @@ export type RawRecommendation = {
       optimization_potential?: string
     }
   }
-  fix_options?: Array<{
-    id: string
-    description: string
-    implementation?: string
-    rollback?: string
-    estimated_impact?: string
-  }>
+  fix_options?: FixOption[]
   expected_gain?: {
     performance_improvement?: number
     description?: string

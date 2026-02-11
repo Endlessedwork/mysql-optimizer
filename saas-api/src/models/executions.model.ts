@@ -486,6 +486,83 @@ export const createSingleFixExecution = async (input: SingleFixExecutionInput): 
   };
 };
 
+// Step execution input for multi-step recommendations
+export interface StepExecutionInput {
+  recommendationPackId: string;
+  connectionId: string;
+  recommendationIndex: number;
+  fixIndex: number;
+  stepId: string;
+  stepType: string;
+  sql: string;
+  tenantId: string;
+}
+
+// Step execution result
+export interface StepExecution {
+  id: string;
+  recommendationPackId: string;
+  connectionId: string;
+  stepId: string;
+  stepType: string;
+  status: string;
+  sql: string;
+  createdAt: string;
+}
+
+// Create execution for a single step in multi-step recommendation
+export const createStepExecution = async (input: StepExecutionInput): Promise<StepExecution> => {
+  // First, create or get an approval for this pack (if not exists)
+  let approvalId: string;
+
+  const existingApproval = await Database.query<any>(
+    `SELECT id FROM approvals WHERE recommendation_pack_id = $1`,
+    [input.recommendationPackId]
+  );
+
+  if (existingApproval.rows.length > 0) {
+    approvalId = existingApproval.rows[0].id;
+  } else {
+    // Create auto-approval for step execution
+    const approvalResult = await Database.query<any>(
+      `INSERT INTO approvals (id, recommendation_pack_id, status, approved_at, created_at)
+      VALUES (gen_random_uuid(), $1, 'approved', NOW(), NOW())
+      RETURNING id`,
+      [input.recommendationPackId]
+    );
+    approvalId = approvalResult.rows[0].id;
+  }
+
+  // Create execution record with step metadata
+  const metadata = JSON.stringify({
+    type: 'step_execution',
+    recommendationIndex: input.recommendationIndex,
+    fixIndex: input.fixIndex,
+    stepId: input.stepId,
+    stepType: input.stepType,
+    sql: input.sql
+  });
+
+  const result = await Database.query<any>(
+    `INSERT INTO execution_history (approval_id, execution_status, error_message, created_at)
+    VALUES ($1, 'pending', $2, NOW())
+    RETURNING id, created_at as "createdAt"`,
+    [approvalId, metadata]
+  );
+
+  const row = result.rows[0];
+  return {
+    id: row.id,
+    recommendationPackId: input.recommendationPackId,
+    connectionId: input.connectionId,
+    stepId: input.stepId,
+    stepType: input.stepType,
+    status: 'pending',
+    sql: input.sql,
+    createdAt: row.createdAt?.toISOString() || row.createdAt
+  };
+};
+
 export const getExecutionWithRecommendations = async (id: string): Promise<ExecutionWithRecommendations | null> => {
   const result = await Database.query<any>(
     `SELECT 

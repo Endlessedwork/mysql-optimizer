@@ -1,12 +1,13 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import type { RecommendationDetail as RecommendationDetailType, RawRecommendation } from '@/lib/types';
+import type { RecommendationDetail as RecommendationDetailType, RawRecommendation, FixOption, RecommendationStep } from '@/lib/types';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { ReportPreviewModal } from '@/components/ui/ReportPreviewModal';
 import { RecommendationActions } from './RecommendationActions';
-import { exportRecommendationReport, getRecommendationReportContent, executeSingleFix } from '@/lib/api-client';
+import { StepRoadmap } from './StepRoadmap';
+import { exportRecommendationReport, getRecommendationReportContent, executeSingleFix, executeRecommendationStep } from '@/lib/api-client';
 import { CodeBlock } from '@/components/ui/CodeBlock';
 import {
   AlertTriangle,
@@ -346,31 +347,60 @@ const RecommendationRow = ({
                       </p>
                     </div>
                   )}
-                  {fixOption.implementation && (
-                    <CodeBlock
-                      code={fixOption.implementation}
-                      language="sql"
-                      title="SQL Implementation"
-                      variant="success"
-                      collapsedHeight={100}
-                    />
-                  )}
 
-                  {/* Apply Button */}
-                  <Button
-                    variant={applied ? 'secondary' : 'primary'}
-                    size="sm"
-                    onClick={handleApply}
-                    disabled={applying || applied || !fixOption.implementation}
-                    icon={
-                      applying ? <Loader2 className="w-4 h-4 animate-spin" /> :
-                      applied ? <CheckCircle2 className="w-4 h-4" /> :
-                      <Play className="w-4 h-4" />
-                    }
-                    className="w-full"
-                  >
-                    {applying ? 'Queueing...' : applied ? 'Queued for Execution' : 'Apply This Fix'}
-                  </Button>
+                  {/* Multi-step Roadmap OR Single SQL */}
+                  {fixOption.is_multistep && fixOption.steps ? (
+                    <StepRoadmap
+                      fixOption={fixOption as FixOption}
+                      onExecuteStep={async (step) => {
+                        try {
+                          const result = await executeRecommendationStep({
+                            recommendationPackId: packId,
+                            recommendationIndex: index,
+                            fixIndex: 0,
+                            stepId: step.id,
+                            sql: step.sql
+                          });
+
+                          if (result.ok && result.data) {
+                            onApplyResult?.(true, `Step ${step.step_number} queued successfully! Execution ID: ${result.data.id.substring(0, 8)}`);
+                          } else {
+                            onApplyResult?.(false, result.error || 'Failed to queue step execution');
+                          }
+                        } catch (error) {
+                          onApplyResult?.(false, 'Failed to execute step');
+                        }
+                      }}
+                    />
+                  ) : (
+                    <>
+                      {fixOption.implementation && (
+                        <CodeBlock
+                          code={fixOption.implementation}
+                          language="sql"
+                          title="SQL Implementation"
+                          variant="success"
+                          collapsedHeight={100}
+                        />
+                      )}
+
+                      {/* Apply Button - only for non-multistep */}
+                      <Button
+                        variant={applied ? 'secondary' : 'primary'}
+                        size="sm"
+                        onClick={handleApply}
+                        disabled={applying || applied || !fixOption.implementation}
+                        icon={
+                          applying ? <Loader2 className="w-4 h-4 animate-spin" /> :
+                          applied ? <CheckCircle2 className="w-4 h-4" /> :
+                          <Play className="w-4 h-4" />
+                        }
+                        className="w-full"
+                      >
+                        {applying ? 'Queueing...' : applied ? 'Queued for Execution' : 'Apply This Fix'}
+                      </Button>
+                    </>
+                  )}
                 </div>
               )}
 

@@ -1,4 +1,10 @@
 import { randomUUID } from 'crypto';
+import {
+  MultiStepFixOption,
+  RecommendationStep,
+  StepStatus,
+  MULTISTEP_TEMPLATES
+} from './types';
 
 export interface RecommendationPack {
   recommendations: any[];
@@ -317,25 +323,34 @@ export class RecommendationPackGenerator {
     return severityScores[finding.severity] || 30;
   }
 
-  private generateFixOptions(finding: any, tableName: string): any[] {
-    const options = [];
+  private generateFixOptions(finding: any, tableName: string): MultiStepFixOption[] {
+    const options: MultiStepFixOption[] = [];
     const evidence = finding.evidence || {};
     const columns = this.extractColumnsFromQuery(finding.query, finding.type);
-    
+    const query = finding.query || '';
+
     switch (finding.type) {
       case 'full_table_scan':
       case 'where_without_index':
         const whereCols = columns.length > 0 ? columns : ['column_name'];
         const indexName = `idx_${tableName}_${whereCols[0]}`.substring(0, 64);
-        options.push({
+        const createIndexSql = `CREATE INDEX ${indexName} ON ${tableName}(${whereCols.join(', ')});`;
+        const dropIndexSql = `DROP INDEX ${indexName} ON ${tableName};`;
+
+        options.push(this.createMultiStepFixOption({
           id: 'add_index',
           description: `สร้าง index บน ${tableName}(${whereCols.join(', ')}) เพื่อหลีกเลี่ยง full table scan`,
-          implementation: `CREATE INDEX ${indexName} ON ${tableName}(${whereCols.join(', ')});`,
-          rollback: `DROP INDEX ${indexName} ON ${tableName};`,
-          estimated_impact: evidence.rows_to_examine 
+          implementation: createIndexSql,
+          rollback: dropIndexSql,
+          estimated_impact: evidence.rows_to_examine
             ? `ลด rows examined จาก ${evidence.rows_to_examine?.toLocaleString()} เหลือประมาณ 1-100`
-            : 'ลด rows examined อย่างมาก'
-        });
+            : 'ลด rows examined อย่างมาก',
+          templateKey: 'add_index',
+          query,
+          tableName,
+          fixSql: createIndexSql,
+          rollbackSql: dropIndexSql
+        }));
         break;
 
       case 'filesort':
@@ -344,20 +359,29 @@ export class RecommendationPackGenerator {
         const whereCols2 = this.extractWhereColumns(finding.query);
         const compositeCols = [...whereCols2, ...sortCols].filter((v, i, a) => a.indexOf(v) === i);
         const sortIndexName = `idx_${tableName}_sort`.substring(0, 64);
-        
+
         if (compositeCols.length > 0) {
-          options.push({
+          const compositeCreateSql = `CREATE INDEX ${sortIndexName} ON ${tableName}(${compositeCols.join(', ')});`;
+          const compositeDropSql = `DROP INDEX ${sortIndexName} ON ${tableName};`;
+
+          options.push(this.createMultiStepFixOption({
             id: 'add_composite_index',
             description: `สร้าง composite index รวม WHERE + ORDER BY columns`,
-            implementation: `CREATE INDEX ${sortIndexName} ON ${tableName}(${compositeCols.join(', ')});`,
-            rollback: `DROP INDEX ${sortIndexName} ON ${tableName};`,
-            estimated_impact: 'หลีกเลี่ยง filesort operation'
-          });
+            implementation: compositeCreateSql,
+            rollback: compositeDropSql,
+            estimated_impact: 'หลีกเลี่ยง filesort operation',
+            templateKey: 'add_index',
+            query,
+            tableName,
+            fixSql: compositeCreateSql,
+            rollbackSql: compositeDropSql
+          }));
         } else {
           options.push({
             id: 'review_query',
             description: 'ตรวจสอบ ORDER BY clause และพิจารณาสร้าง index',
-            implementation: `-- วิเคราะห์ query และสร้าง index ตาม ORDER BY columns\nSHOW INDEX FROM ${tableName};`
+            implementation: `-- วิเคราะห์ query และสร้าง index ตาม ORDER BY columns\nSHOW INDEX FROM ${tableName};`,
+            is_multistep: false
           });
         }
         break;
@@ -367,18 +391,27 @@ export class RecommendationPackGenerator {
         const targetCols = this.extractWhereColumns(finding.query);
         if (targetCols.length > 0) {
           const coveringIndexName = `idx_${tableName}_covering`.substring(0, 64);
-          options.push({
+          const coveringCreateSql = `CREATE INDEX ${coveringIndexName} ON ${tableName}(${targetCols.join(', ')});`;
+          const coveringDropSql = `DROP INDEX ${coveringIndexName} ON ${tableName};`;
+
+          options.push(this.createMultiStepFixOption({
             id: 'add_covering_index',
             description: `สร้าง covering index เพื่อลด rows examined`,
-            implementation: `CREATE INDEX ${coveringIndexName} ON ${tableName}(${targetCols.join(', ')});`,
-            rollback: `DROP INDEX ${coveringIndexName} ON ${tableName};`,
-            estimated_impact: `ปรับปรุง efficiency จาก ${evidence.efficiency || 'ต่ำ'} เป็นใกล้เคียง 100%`
-          });
+            implementation: coveringCreateSql,
+            rollback: coveringDropSql,
+            estimated_impact: `ปรับปรุง efficiency จาก ${evidence.efficiency || 'ต่ำ'} เป็นใกล้เคียง 100%`,
+            templateKey: 'add_index',
+            query,
+            tableName,
+            fixSql: coveringCreateSql,
+            rollbackSql: coveringDropSql
+          }));
         } else {
           options.push({
             id: 'analyze_query',
             description: 'วิเคราะห์และปรับปรุง query structure',
-            implementation: `-- วิเคราะห์ query pattern\nEXPLAIN FORMAT=JSON ${finding.query?.substring(0, 200) || 'SELECT ...'}...`
+            implementation: `-- วิเคราะห์ query pattern\nEXPLAIN FORMAT=JSON ${query.substring(0, 200) || 'SELECT ...'}...`,
+            is_multistep: false
           });
         }
         break;
@@ -387,44 +420,67 @@ export class RecommendationPackGenerator {
         const groupCols = this.extractGroupByColumns(finding.query);
         if (groupCols.length > 0) {
           const groupIndexName = `idx_${tableName}_group`.substring(0, 64);
-          options.push({
+          const groupCreateSql = `CREATE INDEX ${groupIndexName} ON ${tableName}(${groupCols.join(', ')});`;
+          const groupDropSql = `DROP INDEX ${groupIndexName} ON ${tableName};`;
+
+          options.push(this.createMultiStepFixOption({
             id: 'add_group_index',
             description: `สร้าง index บน GROUP BY columns`,
-            implementation: `CREATE INDEX ${groupIndexName} ON ${tableName}(${groupCols.join(', ')});`,
-            rollback: `DROP INDEX ${groupIndexName} ON ${tableName};`,
-            estimated_impact: 'หลีกเลี่ยงการสร้าง temporary table'
-          });
+            implementation: groupCreateSql,
+            rollback: groupDropSql,
+            estimated_impact: 'หลีกเลี่ยงการสร้าง temporary table',
+            templateKey: 'add_index',
+            query,
+            tableName,
+            fixSql: groupCreateSql,
+            rollbackSql: groupDropSql
+          }));
         }
         break;
 
       case 'table_fragmentation':
-        options.push({
+        const optimizeSql = `OPTIMIZE TABLE ${tableName};`;
+        options.push(this.createMultiStepFixOption({
           id: 'optimize_table',
           description: `Defragment table เพื่อ reclaim space และปรับปรุงประสิทธิภาพ`,
-          implementation: `OPTIMIZE TABLE ${tableName};`,
+          implementation: optimizeSql,
           rollback: '-- ไม่จำเป็นต้อง rollback',
           estimated_impact: `Reclaim ${evidence.fragmented_mb || 'N/A'} MB พื้นที่ disk`,
-          warning: 'อาจ lock table ระหว่างดำเนินการ'
-        });
+          warning: 'อาจ lock table ระหว่างดำเนินการ',
+          templateKey: 'optimize_table',
+          query: '',
+          tableName,
+          fixSql: optimizeSql,
+          rollbackSql: ''
+        }));
         break;
 
       case 'unused_index':
-        options.push({
+        const dropUnusedSql = `DROP INDEX ${finding.index || 'index_name'} ON ${tableName};`;
+        options.push(this.createMultiStepFixOption({
           id: 'drop_unused_index',
           description: `ลบ index ที่ไม่ได้ใช้งานเพื่อลด write overhead`,
-          implementation: `DROP INDEX ${finding.index || 'index_name'} ON ${tableName};`,
+          implementation: dropUnusedSql,
           rollback: `-- บันทึก index definition ก่อนลบ\nSHOW CREATE TABLE ${tableName};`,
-          estimated_impact: `ลด write overhead ${evidence.write_overhead?.toLocaleString() || 'N/A'} operations`
-        });
+          estimated_impact: `ลด write overhead ${evidence.write_overhead?.toLocaleString() || 'N/A'} operations`,
+          templateKey: 'drop_unused_index',
+          query: '',
+          tableName,
+          fixSql: dropUnusedSql,
+          rollbackSql: ''
+        }));
         break;
 
       case 'slow_query':
       case 'missing_index':
+        // For slow queries, we need analysis first - keep as non-multistep for now
+        // but provide structured guidance
         options.push({
           id: 'analyze_slow_query',
           description: 'วิเคราะห์ slow query และเพิ่ม index ที่เหมาะสม',
-          implementation: `-- Step 1: ดู execution plan\nEXPLAIN FORMAT=JSON ${finding.query?.substring(0, 200) || 'SELECT ...'}...\n\n-- Step 2: ตรวจสอบ indexes ที่มี\nSHOW INDEX FROM ${tableName};\n\n-- Step 3: สร้าง index ตาม WHERE/JOIN columns`,
-          estimated_impact: `ลดเวลาจาก ${evidence.avg_time_sec || 'N/A'} seconds`
+          implementation: `-- Step 1: ดู execution plan\nEXPLAIN FORMAT=JSON ${query.substring(0, 200) || 'SELECT ...'}...\n\n-- Step 2: ตรวจสอบ indexes ที่มี\nSHOW INDEX FROM ${tableName};\n\n-- Step 3: สร้าง index ตาม WHERE/JOIN columns`,
+          estimated_impact: `ลดเวลาจาก ${evidence.avg_time_sec || 'N/A'} seconds`,
+          is_multistep: false
         });
         break;
 
@@ -433,7 +489,8 @@ export class RecommendationPackGenerator {
           id: 'partition_table',
           description: 'พิจารณา table partitioning หรือ archiving',
           implementation: `-- วิเคราะห์ data distribution\nSELECT DATE(created_at), COUNT(*) FROM ${tableName} GROUP BY DATE(created_at) ORDER BY 1 DESC LIMIT 30;\n\n-- พิจารณา partition by date หรือ archive old data`,
-          estimated_impact: 'ปรับปรุงประสิทธิภาพ query บน large tables'
+          estimated_impact: 'ปรับปรุงประสิทธิภาพ query บน large tables',
+          is_multistep: false
         });
         break;
 
@@ -441,11 +498,105 @@ export class RecommendationPackGenerator {
         options.push({
           id: 'general_review',
           description: `ตรวจสอบและปรับปรุง ${tableName}`,
-          implementation: `-- วิเคราะห์ table structure\nSHOW CREATE TABLE ${tableName};\nSHOW INDEX FROM ${tableName};\nANALYZE TABLE ${tableName};`
+          implementation: `-- วิเคราะห์ table structure\nSHOW CREATE TABLE ${tableName};\nSHOW INDEX FROM ${tableName};\nANALYZE TABLE ${tableName};`,
+          is_multistep: false
         });
     }
-    
+
     return options;
+  }
+
+  /**
+   * สร้าง MultiStepFixOption จาก template
+   */
+  private createMultiStepFixOption(params: {
+    id: string;
+    description: string;
+    implementation: string;
+    rollback?: string;
+    estimated_impact?: string;
+    warning?: string;
+    templateKey: string;
+    query: string;
+    tableName: string;
+    fixSql: string;
+    rollbackSql?: string;
+  }): MultiStepFixOption {
+    const template = MULTISTEP_TEMPLATES[params.templateKey];
+
+    if (!template) {
+      // Fallback to non-multistep if no template
+      return {
+        id: params.id,
+        description: params.description,
+        implementation: params.implementation,
+        rollback: params.rollback,
+        estimated_impact: params.estimated_impact,
+        warning: params.warning,
+        is_multistep: false
+      };
+    }
+
+    // Generate steps from template
+    const steps: RecommendationStep[] = template.steps.map((stepTemplate, index) => {
+      const stepId = `step_${index + 1}`;
+      let sql = '';
+
+      // Generate SQL based on step type
+      switch (stepTemplate.step_type) {
+        case 'explain_before':
+        case 'explain_after':
+          if (params.query) {
+            sql = `EXPLAIN FORMAT=JSON ${params.query}`;
+          } else {
+            sql = `-- ไม่มี query สำหรับ EXPLAIN\nSHOW CREATE TABLE ${params.tableName};`;
+          }
+          break;
+        case 'execute_fix':
+          sql = params.fixSql;
+          break;
+        case 'verify':
+          sql = `-- ตรวจสอบผลลัพธ์\nSELECT * FROM performance_schema.table_io_waits_summary_by_index_usage WHERE OBJECT_NAME = '${params.tableName}' ORDER BY COUNT_READ DESC LIMIT 5;`;
+          break;
+        case 'rollback':
+          sql = params.rollbackSql || `-- Rollback\n${params.rollback || 'N/A'}`;
+          break;
+      }
+
+      return {
+        id: stepId,
+        step_number: stepTemplate.step_number,
+        step_type: stepTemplate.step_type,
+        label: stepTemplate.label,
+        description: stepTemplate.description,
+        sql,
+        status: index === 0 ? 'ready' : 'pending' as StepStatus,
+        requires_step_id: stepTemplate.requires_step_id ? `step_${stepTemplate.step_number - 1}` : undefined,
+        estimated_time_sec: stepTemplate.estimated_time_sec,
+        warning: stepTemplate.warning
+      };
+    });
+
+    // Create roadmap summary
+    const roadmap = {
+      title: params.description,
+      summary: `${steps.length} ขั้นตอน: ${steps.map(s => s.label).join(' → ')}`,
+      steps_preview: steps.map(s => `${s.step_number}. ${s.label}`)
+    };
+
+    return {
+      id: params.id,
+      description: params.description,
+      implementation: params.implementation,
+      rollback: params.rollback,
+      estimated_impact: params.estimated_impact,
+      warning: params.warning,
+      is_multistep: true,
+      total_steps: steps.length,
+      current_step: 1,
+      steps,
+      roadmap
+    };
   }
 
   private extractTableFromQuery(query: string): string | null {

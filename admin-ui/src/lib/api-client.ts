@@ -430,3 +430,36 @@ export async function executeSingleFix(input: ExecuteSingleFixInput): Promise<Ap
     }),
   })
 }
+
+// Execute a single step from a multi-step recommendation
+export interface ExecuteStepInput {
+  recommendationPackId: string;
+  recommendationIndex: number;
+  fixIndex: number;
+  stepId: string;
+  sql: string;
+}
+
+export interface ExecuteStepResult {
+  id: string;
+  stepId: string;
+  status: string;
+  evidence?: {
+    collected_at: string;
+    type: string;
+    data: Record<string, any>;
+  };
+  error?: string;
+}
+
+export async function executeRecommendationStep(input: ExecuteStepInput): Promise<ApiResponse<ExecuteStepResult>> {
+  return apiFetch<ExecuteStepResult>(`/api/recommendations/${input.recommendationPackId}/execute-step`, {
+    method: 'POST',
+    body: JSON.stringify({
+      recommendationIndex: input.recommendationIndex,
+      fixIndex: input.fixIndex,
+      stepId: input.stepId,
+      sql: input.sql
+    }),
+  })
+}
