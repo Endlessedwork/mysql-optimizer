@@ -4,11 +4,12 @@ export interface Recommendation {
   id: string;
   connectionId: string;
   connectionName?: string;
-  status: 'pending' | 'approved' | 'rejected' | 'scheduled' | 'executed';
+  status: 'pending' | 'processing' | 'completed' | 'completed_with_errors' | 'rejected';
   createdAt: string;
   updatedAt: string;
-  scheduledAt?: string;
-  reason?: string;
+  totalFixes?: number;
+  appliedFixes?: number;
+  failedFixes?: number;
 }
 
 export const getRecommendations = async (filters: { connectionId?: string; status?: string; includeArchived?: boolean }): Promise<Recommendation[]> => {
@@ -18,16 +19,16 @@ export const getRecommendations = async (filters: { connectionId?: string; statu
       sr.connection_profile_id as "connectionId",
       cp.name as "connectionName",
       cp.database_name as "databaseName",
-      COALESCE(a.status, 'pending') as status,
+      COALESCE(rp.status, 'pending') as status,
       rp.created_at as "createdAt",
       rp.generated_at as "updatedAt",
-      a.approved_at as "scheduledAt",
-      a.rejection_reason as reason,
+      rp.total_fixes as "totalFixes",
+      rp.applied_fixes as "appliedFixes",
+      rp.failed_fixes as "failedFixes",
       rp.recommendations as "rawRecommendations",
       jsonb_array_length(rp.recommendations) as "totalCount",
       rp.archived_at as "archivedAt"
     FROM recommendation_packs rp
-    LEFT JOIN approvals a ON a.recommendation_pack_id = rp.id
     LEFT JOIN scan_runs sr ON sr.id = rp.scan_run_id
     LEFT JOIN connection_profiles cp ON cp.id = sr.connection_profile_id
   `;
@@ -48,7 +49,7 @@ export const getRecommendations = async (filters: { connectionId?: string; statu
   }
 
   if (filters.status) {
-    conditions.push(`COALESCE(a.status, 'pending') = $${paramIndex}`);
+    conditions.push(`COALESCE(rp.status, 'pending') = $${paramIndex}`);
     params.push(filters.status);
     paramIndex++;
   }
@@ -104,8 +105,9 @@ export const getRecommendations = async (filters: { connectionId?: string; statu
       status: row.status || 'pending',
       createdAt: row.createdAt?.toISOString() || row.createdAt,
       updatedAt: row.updatedAt?.toISOString() || row.updatedAt,
-      scheduledAt: row.scheduledAt?.toISOString() || row.scheduledAt,
-      reason: row.reason,
+      totalFixes: row.totalFixes || row.totalCount || 0,
+      appliedFixes: row.appliedFixes || 0,
+      failedFixes: row.failedFixes || 0,
       // Summary stats for dev view
       totalCount: row.totalCount || 0,
       severityCounts,
@@ -118,24 +120,24 @@ export const getRecommendations = async (filters: { connectionId?: string; statu
 
 export const getRecommendationById = async (id: string): Promise<Recommendation | null> => {
   const result = await Database.query<any>(
-    `SELECT 
+    `SELECT
       rp.id,
       rp.scan_run_id as "connectionId",
-      COALESCE(a.status, 'pending') as status,
+      COALESCE(rp.status, 'pending') as status,
       rp.created_at as "createdAt",
       rp.generated_at as "updatedAt",
-      a.approved_at as "scheduledAt",
-      a.rejection_reason as reason
+      rp.total_fixes as "totalFixes",
+      rp.applied_fixes as "appliedFixes",
+      rp.failed_fixes as "failedFixes"
     FROM recommendation_packs rp
-    LEFT JOIN approvals a ON a.recommendation_pack_id = rp.id
     WHERE rp.id = $1`,
     [id]
   );
-  
+
   if (result.rows.length === 0) {
     return null;
   }
-  
+
   const row = result.rows[0];
   return {
     id: row.id,
@@ -143,108 +145,95 @@ export const getRecommendationById = async (id: string): Promise<Recommendation 
     status: row.status || 'pending',
     createdAt: row.createdAt?.toISOString() || row.createdAt,
     updatedAt: row.updatedAt?.toISOString() || row.updatedAt,
-    scheduledAt: row.scheduledAt?.toISOString() || row.scheduledAt,
-    reason: row.reason
+    totalFixes: row.totalFixes || 0,
+    appliedFixes: row.appliedFixes || 0,
+    failedFixes: row.failedFixes || 0
   };
 };
 
-export interface ApproveResult extends Recommendation {
-  approvalId?: string;
-  executionId?: string;
-}
-
-export const approveRecommendation = async (id: string): Promise<ApproveResult | null> => {
-  // Check if recommendation exists and is pending
-  const existing = await getRecommendationById(id);
-  if (!existing || existing.status !== 'pending') {
-    return null;
-  }
-  
-  let approvalId: string;
-  
-  // Check if approval already exists
-  const existingApproval = await Database.query<any>(
-    `SELECT id FROM approvals WHERE recommendation_pack_id = $1`,
+// Update pack status based on applied/failed counts
+export const updatePackStatus = async (id: string): Promise<Recommendation | null> => {
+  // Get current counts
+  const result = await Database.query<any>(
+    `SELECT
+      total_fixes as "totalFixes",
+      applied_fixes as "appliedFixes",
+      failed_fixes as "failedFixes",
+      status
+    FROM recommendation_packs
+    WHERE id = $1`,
     [id]
   );
-  
-  if (existingApproval.rows.length > 0) {
-    // Update existing approval
-    await Database.query<any>(
-      `UPDATE approvals SET status = 'approved', approved_at = NOW() WHERE recommendation_pack_id = $1`,
-      [id]
-    );
-    approvalId = existingApproval.rows[0].id;
-  } else {
-    // Create new approval
-    const approvalResult = await Database.query<any>(
-      `INSERT INTO approvals (id, recommendation_pack_id, status, approved_at, created_at)
-      VALUES (gen_random_uuid(), $1, 'approved', NOW(), NOW())
-      RETURNING id`,
-      [id]
-    );
-    approvalId = approvalResult.rows[0].id;
-  }
-  
-  // Auto-create execution record for the Agent to pick up
-  const executionResult = await Database.query<any>(
-    `INSERT INTO execution_history (approval_id, execution_status, created_at)
-    VALUES ($1, 'pending', NOW())
-    RETURNING id`,
-    [approvalId]
-  );
-  const executionId = executionResult.rows[0].id;
-  
-  const result = await getRecommendationById(id);
-  return result ? { ...result, approvalId, executionId } : null;
-};
 
-export const scheduleRecommendation = async (id: string, scheduledAt: string, reason?: string): Promise<Recommendation | null> => {
-  // Check if recommendation exists and is approved
-  const existing = await getRecommendationById(id);
-  if (!existing || existing.status !== 'approved') {
+  if (result.rows.length === 0) {
     return null;
   }
-  
-  // Update approval to scheduled
+
+  const { totalFixes, appliedFixes, failedFixes, status } = result.rows[0];
+
+  // Don't update if rejected
+  if (status === 'rejected') {
+    return getRecommendationById(id);
+  }
+
+  // Calculate new status
+  let newStatus: string;
+  const totalProcessed = (appliedFixes || 0) + (failedFixes || 0);
+
+  if (totalProcessed === 0) {
+    newStatus = 'pending';
+  } else if (totalProcessed < (totalFixes || 0)) {
+    newStatus = 'processing';
+  } else if ((failedFixes || 0) > 0) {
+    newStatus = 'completed_with_errors';
+  } else {
+    newStatus = 'completed';
+  }
+
+  // Update status
   await Database.query<any>(
-    `UPDATE approvals 
-    SET status = 'scheduled', approved_at = $2
-    WHERE recommendation_pack_id = $1`,
-    [id, scheduledAt]
+    `UPDATE recommendation_packs SET status = $1 WHERE id = $2`,
+    [newStatus, id]
   );
-  
+
   return getRecommendationById(id);
 };
 
-export const rejectRecommendation = async (id: string, reason?: string): Promise<Recommendation | null> => {
+// Increment applied fixes count
+export const incrementAppliedFix = async (id: string): Promise<void> => {
+  await Database.query<any>(
+    `UPDATE recommendation_packs
+     SET applied_fixes = COALESCE(applied_fixes, 0) + 1
+     WHERE id = $1`,
+    [id]
+  );
+  await updatePackStatus(id);
+};
+
+// Increment failed fixes count
+export const incrementFailedFix = async (id: string): Promise<void> => {
+  await Database.query<any>(
+    `UPDATE recommendation_packs
+     SET failed_fixes = COALESCE(failed_fixes, 0) + 1
+     WHERE id = $1`,
+    [id]
+  );
+  await updatePackStatus(id);
+};
+
+export const rejectRecommendation = async (id: string, _reason?: string): Promise<Recommendation | null> => {
   // Check if recommendation exists
   const existing = await getRecommendationById(id);
   if (!existing) {
     return null;
   }
-  
-  // Check if approval already exists
-  const existingApproval = await Database.query<any>(
-    `SELECT id FROM approvals WHERE recommendation_pack_id = $1`,
+
+  // Update status directly in recommendation_packs
+  await Database.query<any>(
+    `UPDATE recommendation_packs SET status = 'rejected' WHERE id = $1`,
     [id]
   );
-  
-  if (existingApproval.rows.length > 0) {
-    // Update existing approval
-    await Database.query<any>(
-      `UPDATE approvals SET status = 'rejected', rejection_reason = $2 WHERE recommendation_pack_id = $1`,
-      [id, reason]
-    );
-  } else {
-    // Create new rejection
-    await Database.query<any>(
-      `INSERT INTO approvals (id, recommendation_pack_id, status, rejection_reason, created_at)
-      VALUES (gen_random_uuid(), $1, 'rejected', $2, NOW())`,
-      [id, reason]
-    );
-  }
-  
+
   return getRecommendationById(id);
 };
 
@@ -262,7 +251,9 @@ export interface RecommendationPackDetail {
   generatedAt: string;
   createdAt: string;
   status: string;
-  approvalId?: string;
+  totalFixes: number;
+  appliedFixes: number;
+  failedFixes: number;
   connectionId?: string;
   connectionName?: string;
   databaseName?: string;
@@ -290,13 +281,16 @@ export const createRecommendationPack = async (input: RecommendationPackInput): 
     );
   }
 
+  const totalFixes = input.recommendations?.length || 0;
+
   // Create new pack (will be the only active one for this connection)
   const result = await Database.query<any>(
-    `INSERT INTO recommendation_packs (scan_run_id, tenant_id, recommendations, generated_at)
-    VALUES ($1, $2, $3, NOW())
+    `INSERT INTO recommendation_packs (scan_run_id, tenant_id, recommendations, status, total_fixes, applied_fixes, failed_fixes, generated_at)
+    VALUES ($1, $2, $3, 'pending', $4, 0, 0, NOW())
     RETURNING id, scan_run_id as "scanRunId", tenant_id as "tenantId", recommendations,
+      status, total_fixes as "totalFixes", applied_fixes as "appliedFixes", failed_fixes as "failedFixes",
       generated_at as "generatedAt", created_at as "createdAt"`,
-    [input.scanRunId, input.tenantId, JSON.stringify(input.recommendations)]
+    [input.scanRunId, input.tenantId, JSON.stringify(input.recommendations), totalFixes]
   );
 
   const row = result.rows[0];
@@ -307,7 +301,10 @@ export const createRecommendationPack = async (input: RecommendationPackInput): 
     recommendations: row.recommendations,
     generatedAt: row.generatedAt?.toISOString() || row.generatedAt,
     createdAt: row.createdAt?.toISOString() || row.createdAt,
-    status: 'pending'
+    status: row.status || 'pending',
+    totalFixes: row.totalFixes || 0,
+    appliedFixes: row.appliedFixes || 0,
+    failedFixes: row.failedFixes || 0
   };
 };
 
@@ -320,13 +317,14 @@ export const getRecommendationPackDetail = async (id: string): Promise<Recommend
       rp.recommendations,
       rp.generated_at as "generatedAt",
       rp.created_at as "createdAt",
-      COALESCE(a.status, 'pending') as status,
-      a.id as "approvalId",
+      COALESCE(rp.status, 'pending') as status,
+      COALESCE(rp.total_fixes, jsonb_array_length(rp.recommendations)) as "totalFixes",
+      COALESCE(rp.applied_fixes, 0) as "appliedFixes",
+      COALESCE(rp.failed_fixes, 0) as "failedFixes",
       sr.connection_profile_id as "connectionId",
       cp.name as "connectionName",
       cp.database_name as "databaseName"
     FROM recommendation_packs rp
-    LEFT JOIN approvals a ON a.recommendation_pack_id = rp.id
     LEFT JOIN scan_runs sr ON sr.id = rp.scan_run_id
     LEFT JOIN connection_profiles cp ON cp.id = sr.connection_profile_id
     WHERE rp.id = $1`,
@@ -346,7 +344,9 @@ export const getRecommendationPackDetail = async (id: string): Promise<Recommend
     generatedAt: row.generatedAt?.toISOString() || row.generatedAt,
     createdAt: row.createdAt?.toISOString() || row.createdAt,
     status: row.status,
-    approvalId: row.approvalId,
+    totalFixes: row.totalFixes || 0,
+    appliedFixes: row.appliedFixes || 0,
+    failedFixes: row.failedFixes || 0,
     connectionId: row.connectionId,
     connectionName: row.connectionName,
     databaseName: row.databaseName

@@ -1,4 +1,5 @@
 import { Database } from '../database';
+import { incrementAppliedFix, incrementFailedFix } from './recommendations.model';
 
 export interface Execution {
   id: string;
@@ -296,44 +297,59 @@ export const updateExecutionStatus = async (
   errorMessage?: string
 ): Promise<ExecutionDetail | null> => {
   const dbStatus = status === 'completed' ? 'success' : status;
-  
+
   let query = `UPDATE execution_history SET execution_status = $1`;
   const params: any[] = [dbStatus];
   let paramIndex = 2;
-  
+
   if (status === 'completed' || status === 'failed') {
     query += `, executed_at = NOW()`;
   }
-  
+
   if (errorMessage !== undefined) {
     query += `, error_message = $${paramIndex++}`;
     params.push(errorMessage);
   }
-  
+
   query += ` WHERE id = $${paramIndex}
     RETURNING id, approval_id as "approvalId", execution_status as status,
       executed_at as "executedAt", error_message as "errorMessage",
       created_at as "createdAt"`;
   params.push(id);
-  
+
   const result = await Database.query<any>(query, params);
-  
+
   if (result.rows.length === 0) {
     return null;
   }
-  
+
   const row = result.rows[0];
-  
+
   const approvalResult = await Database.query<any>(
     `SELECT recommendation_pack_id FROM approvals WHERE id = $1`,
     [row.approvalId]
   );
-  
+
+  const recommendationPackId = approvalResult.rows[0]?.recommendation_pack_id;
+
+  // Update recommendation pack status based on execution result
+  if (recommendationPackId && (status === 'completed' || status === 'failed')) {
+    try {
+      if (status === 'completed') {
+        await incrementAppliedFix(recommendationPackId);
+      } else if (status === 'failed') {
+        await incrementFailedFix(recommendationPackId);
+      }
+    } catch (err) {
+      console.error('Failed to update pack status:', err);
+    }
+  }
+
   return {
     id: row.id,
     approvalId: row.approvalId,
-    recommendationPackId: approvalResult.rows[0]?.recommendation_pack_id,
-    connectionId: approvalResult.rows[0]?.recommendation_pack_id,
+    recommendationPackId,
+    connectionId: recommendationPackId,
     status: mapExecutionStatus(row.status),
     createdAt: row.createdAt?.toISOString() || row.createdAt,
     updatedAt: row.executedAt?.toISOString() || row.createdAt,

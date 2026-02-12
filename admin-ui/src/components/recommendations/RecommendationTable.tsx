@@ -218,7 +218,11 @@ export const RecommendationTable = ({
 
                   {/* Status */}
                   <td className="px-3 py-3">
-                    <RecommendationStatusBadge status={rec.status} />
+                    <RecommendationStatusBadge
+                      status={rec.status}
+                      appliedFixes={(rec as any).appliedFixes}
+                      totalFixes={(rec as any).totalFixes || rec.totalCount}
+                    />
                   </td>
 
                   {/* Created */}

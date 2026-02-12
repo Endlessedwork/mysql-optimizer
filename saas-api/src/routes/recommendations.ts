@@ -3,11 +3,11 @@ import { authenticate } from '../middleware/auth';
 import {
   getRecommendations,
   getRecommendationById,
-  approveRecommendation,
-  scheduleRecommendation,
   rejectRecommendation,
   createRecommendationPack,
   getRecommendationPackDetail,
+  incrementAppliedFix,
+  incrementFailedFix,
   RecommendationPackInput
 } from '../models/recommendations.model';
 
@@ -21,11 +21,40 @@ const ALLOWED_SQL_PATTERNS = [
   /^SHOW\s+(INDEX|INDEXES|KEYS|CREATE\s+TABLE|TABLE\s+STATUS)\s+/i,
   /^ANALYZE\s+TABLE\s+/i,
   /^SELECT\s+.*\s+FROM\s+(performance_schema|information_schema)\./i,
-  /^--\s+.*$/i,  // SQL comments
 ];
 
 // Step ID format validation
 const VALID_STEP_ID_PATTERN = /^step_\d+$/;
+
+/**
+ * Strips SQL comments from the beginning of a SQL string
+ * Handles both single-line (--) and multi-line comments
+ */
+function stripLeadingComments(sql: string): string {
+  let result = sql.trim();
+
+  // Strip single-line comments (-- ...)
+  while (result.startsWith('--')) {
+    const newlineIndex = result.indexOf('\n');
+    if (newlineIndex === -1) {
+      // Entire string is a comment
+      return '';
+    }
+    result = result.substring(newlineIndex + 1).trim();
+  }
+
+  // Strip multi-line comments (/* ... */)
+  while (result.startsWith('/*')) {
+    const endIndex = result.indexOf('*/');
+    if (endIndex === -1) {
+      // Unclosed comment
+      return '';
+    }
+    result = result.substring(endIndex + 2).trim();
+  }
+
+  return result;
+}
 
 /**
  * Validates SQL to prevent injection attacks
@@ -37,12 +66,21 @@ function isValidOptimizationSQL(sql: string): boolean {
   // Empty SQL is not valid
   if (!trimmedSql) return false;
 
+  // Strip leading comments and validate the actual SQL command
+  const actualSql = stripLeadingComments(trimmedSql);
+
+  // If after stripping comments we have nothing, it's just comments - allow it
+  // (agent may send analysis comments)
+  if (!actualSql) {
+    return true;
+  }
+
   // Check against allowed patterns
-  const isAllowed = ALLOWED_SQL_PATTERNS.some(pattern => pattern.test(trimmedSql));
+  const isAllowed = ALLOWED_SQL_PATTERNS.some(pattern => pattern.test(actualSql));
 
   if (!isAllowed) {
     // Log blocked SQL for security audit
-    console.warn(`[SECURITY] Blocked SQL execution attempt: ${trimmedSql.substring(0, 100)}...`);
+    console.warn(`[SECURITY] Blocked SQL execution attempt: ${actualSql.substring(0, 100)}...`);
   }
 
   return isAllowed;
@@ -175,156 +213,6 @@ export default async function recommendationsRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // POST /api/recommendations/:id/approve - Approve recommendation
-  fastify.post('/api/recommendations/:id/approve', {
-    preHandler: [authenticate],
-    schema: {
-      params: {
-        type: 'object',
-        properties: {
-          id: { type: 'string' }
-        },
-        required: ['id']
-      },
-      response: {
-        200: {
-          type: 'object',
-          properties: {
-            success: { type: 'boolean' },
-            data: {
-              type: 'object',
-              properties: {
-                id: { type: 'string' },
-                status: { type: 'string' }
-              }
-            }
-          }
-        }
-      }
-    }
-  }, async (request, reply) => {
-    try {
-      const { id } = request.params as { id: string };
-      
-      // ตรวจสอบว่า recommendation มีอยู่จริงหรือไม่
-      const recommendation = await getRecommendationById(id);
-      if (!recommendation) {
-        return reply.status(404).send({
-          success: false,
-          error: 'Recommendation not found'
-        });
-      }
-      
-      // ตรวจสอบว่า status สามารถ approve ได้หรือไม่
-      if (recommendation.status !== 'pending') {
-        return reply.status(400).send({
-          success: false,
-          error: 'Recommendation is not in pending status'
-        });
-      }
-      
-      const result = await approveRecommendation(id);
-      
-      if (!result) {
-        return reply.status(404).send({
-          success: false,
-          error: 'Failed to approve recommendation'
-        });
-      }
-      
-      return {
-        success: true,
-        data: result
-      };
-    } catch (error) {
-      fastify.log.error(error);
-      return reply.status(500).send({
-        success: false,
-        error: 'Failed to approve recommendation'
-      });
-    }
-  });
-
-  // POST /api/recommendations/:id/schedule - Schedule recommendation
-  fastify.post('/api/recommendations/:id/schedule', {
-    preHandler: [authenticate],
-    schema: {
-      params: {
-        type: 'object',
-        properties: {
-          id: { type: 'string' }
-        },
-        required: ['id']
-      },
-      body: {
-        type: 'object',
-        properties: {
-          scheduledAt: { type: 'string' },
-          reason: { type: 'string' }
-        },
-        required: ['scheduledAt']
-      },
-      response: {
-        200: {
-          type: 'object',
-          properties: {
-            success: { type: 'boolean' },
-            data: {
-              type: 'object',
-              properties: {
-                id: { type: 'string' },
-                status: { type: 'string' },
-                scheduledAt: { type: 'string' }
-              }
-            }
-          }
-        }
-      }
-    }
-  }, async (request, reply) => {
-    try {
-      const { id } = request.params as { id: string };
-      const { scheduledAt, reason } = request.body as { scheduledAt: string; reason?: string };
-      
-      // ตรวจสอบว่า recommendation มีอยู่จริงหรือไม่
-      const recommendation = await getRecommendationById(id);
-      if (!recommendation) {
-        return reply.status(404).send({
-          success: false,
-          error: 'Recommendation not found'
-        });
-      }
-      
-      // ตรวจสอบว่า status สามารถ schedule ได้หรือไม่
-      if (recommendation.status !== 'approved') {
-        return reply.status(400).send({
-          success: false,
-          error: 'Recommendation is not in approved status'
-        });
-      }
-      
-      const result = await scheduleRecommendation(id, scheduledAt, reason);
-      
-      if (!result) {
-        return reply.status(404).send({
-          success: false,
-          error: 'Failed to schedule recommendation'
-        });
-      }
-      
-      return {
-        success: true,
-        data: result
-      };
-    } catch (error) {
-      fastify.log.error(error);
-      return reply.status(500).send({
-        success: false,
-        error: 'Failed to schedule recommendation'
-      });
-    }
-  });
-
   // POST /api/recommendations/:id/reject - Reject recommendation
   fastify.post('/api/recommendations/:id/reject', {
     preHandler: [authenticate],
@@ -372,11 +260,11 @@ export default async function recommendationsRoutes(fastify: FastifyInstance) {
         });
       }
       
-      // ตรวจสอบว่า status สามารถ reject ได้หรือไม่
-      if (!['pending', 'approved'].includes(recommendation.status)) {
+      // ตรวจสอบว่า status สามารถ reject ได้หรือไม่ (ได้ทุก status ยกเว้น rejected แล้ว)
+      if (recommendation.status === 'rejected') {
         return reply.status(400).send({
           success: false,
-          error: 'Recommendation is not in a valid status for rejection'
+          error: 'Recommendation is already rejected'
         });
       }
       

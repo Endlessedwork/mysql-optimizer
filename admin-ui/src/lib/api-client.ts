@@ -208,20 +208,6 @@ export async function getRecommendation(id: string): Promise<ApiResponse<Recomme
   return apiFetch<RecommendationDetail>(`/api/recommendations/${id}`)
 }
 
-export async function approveRecommendation(id: string): Promise<ApiResponse<void>> {
-  return apiFetch<void>(`/api/recommendations/${id}/approve`, {
-    method: 'POST',
-    body: JSON.stringify({}),
-  })
-}
-
-export async function scheduleRecommendation(id: string, scheduledAt: string): Promise<ApiResponse<void>> {
-  return apiFetch<void>(`/api/recommendations/${id}/schedule`, {
-    method: 'POST',
-    body: JSON.stringify({ scheduledAt }),
-  })
-}
-
 export async function rejectRecommendation(id: string, reason?: string): Promise<ApiResponse<void>> {
   return apiFetch<void>(`/api/recommendations/${id}/reject`, {
     method: 'POST',

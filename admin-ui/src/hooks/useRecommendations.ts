@@ -1,16 +1,14 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { 
-  getRecommendations, 
-  getRecommendation, 
-  approveRecommendation, 
-  scheduleRecommendation,
+import {
+  getRecommendations,
+  getRecommendation,
   rejectRecommendation
 } from '@/lib/api-client';
-import { Recommendation, RecommendationDetail } from '@/lib/types';
+import { Recommendation, RecommendationDetail, RecommendationStatus } from '@/lib/types';
 
 // Fetch all recommendations with filters
 export const useRecommendations = (
-  statusFilter: 'pending' | 'approved' | 'scheduled' | 'executed' | 'failed' | 'all' = 'all',
+  statusFilter: RecommendationStatus | 'all' = 'all',
   connectionFilter: string | null = null,
   includeArchived: boolean = false
 ) => {
@@ -42,50 +40,6 @@ export const useRecommendation = (id: string) => {
       return response.data!;
     },
     enabled: !!id,
-  });
-};
-
-// Mutation for approving recommendation
-export const useApproveRecommendation = () => {
-  const queryClient = useQueryClient();
-  
-  return useMutation({
-    mutationFn: async (id: string) => {
-      const response = await approveRecommendation(id);
-      if (!response.ok) {
-        throw new Error(response.error || 'Failed to approve recommendation');
-      }
-    },
-    onSuccess: () => {
-      // Invalidate and refetch
-      queryClient.invalidateQueries({ queryKey: ['recommendations'] });
-      queryClient.invalidateQueries({ queryKey: ['recommendation'] });
-    },
-  });
-};
-
-// Mutation for scheduling recommendation
-export const useScheduleRecommendation = () => {
-  const queryClient = useQueryClient();
-  
-  return useMutation({
-    mutationFn: async ({ 
-      id, 
-      scheduledAt 
-    }: { 
-      id: string; 
-      scheduledAt: string; 
-    }) => {
-      const response = await scheduleRecommendation(id, scheduledAt);
-      if (!response.ok) {
-        throw new Error(response.error || 'Failed to schedule recommendation');
-      }
-    },
-    onSuccess: () => {
-      // Invalidate and refetch
-      queryClient.invalidateQueries({ queryKey: ['recommendations'] });
-      queryClient.invalidateQueries({ queryKey: ['recommendation'] });
-    },
   });
 };
 

@@ -13,7 +13,7 @@ export type Connection = {
 }
 
 // Recommendation types
-export type RecommendationStatus = 'pending' | 'approved' | 'scheduled' | 'executed' | 'failed' | 'rejected';
+export type RecommendationStatus = 'pending' | 'processing' | 'completed' | 'completed_with_errors' | 'rejected';
 
 export type Recommendation = {
   id: string

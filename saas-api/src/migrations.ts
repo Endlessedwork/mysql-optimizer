@@ -97,7 +97,12 @@ CREATE TABLE IF NOT EXISTS recommendation_packs (
     scan_run_id UUID REFERENCES scan_runs(id),
     tenant_id UUID REFERENCES tenants(id),
     recommendations JSONB,
+    status VARCHAR(50) DEFAULT 'pending', -- pending, processing, completed, completed_with_errors, rejected
+    total_fixes INTEGER DEFAULT 0,
+    applied_fixes INTEGER DEFAULT 0,
+    failed_fixes INTEGER DEFAULT 0,
     generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    archived_at TIMESTAMP DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -175,6 +180,31 @@ CREATE INDEX IF NOT EXISTS idx_execution_history_approval_id ON execution_histor
 CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_id ON audit_logs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_entity_type ON audit_logs(entity_type);
+
+-- Add new columns to recommendation_packs for status tracking (if not exists)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'recommendation_packs' AND column_name = 'status') THEN
+        ALTER TABLE recommendation_packs ADD COLUMN status VARCHAR(50) DEFAULT 'pending';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'recommendation_packs' AND column_name = 'total_fixes') THEN
+        ALTER TABLE recommendation_packs ADD COLUMN total_fixes INTEGER DEFAULT 0;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'recommendation_packs' AND column_name = 'applied_fixes') THEN
+        ALTER TABLE recommendation_packs ADD COLUMN applied_fixes INTEGER DEFAULT 0;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'recommendation_packs' AND column_name = 'failed_fixes') THEN
+        ALTER TABLE recommendation_packs ADD COLUMN failed_fixes INTEGER DEFAULT 0;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'recommendation_packs' AND column_name = 'archived_at') THEN
+        ALTER TABLE recommendation_packs ADD COLUMN archived_at TIMESTAMP DEFAULT NULL;
+    END IF;
+END $$;
+
+-- Update existing packs: set total_fixes from recommendations array length
+UPDATE recommendation_packs
+SET total_fixes = COALESCE(jsonb_array_length(recommendations), 0)
+WHERE total_fixes = 0 OR total_fixes IS NULL;
 `;
 
 async function checkTableExists(tableName: string): Promise<boolean> {

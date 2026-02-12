@@ -11,7 +11,7 @@ import { useRouter } from 'next/navigation';
 import { Lightbulb, RefreshCw, X, Database, AlertTriangle, AlertCircle, Info, CheckCircle2, Table2, FileCode2, Archive } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 
-type StatusFilter = 'all' | 'pending' | 'approved' | 'scheduled' | 'executed' | 'failed';
+type StatusFilter = 'all' | 'pending' | 'processing' | 'completed' | 'completed_with_errors' | 'rejected';
 
 export default function RecommendationsPage() {
   const router = useRouter();
@@ -103,10 +103,10 @@ export default function RecommendationsPage() {
   const filters: { key: StatusFilter; label: string }[] = [
     { key: 'all', label: 'All' },
     { key: 'pending', label: 'Pending' },
-    { key: 'approved', label: 'Approved' },
-    { key: 'scheduled', label: 'Scheduled' },
-    { key: 'executed', label: 'Executed' },
-    { key: 'failed', label: 'Failed' },
+    { key: 'processing', label: 'Processing' },
+    { key: 'completed', label: 'Completed' },
+    { key: 'completed_with_errors', label: 'Completed with Errors' },
+    { key: 'rejected', label: 'Rejected' },
   ];
 
   return (
@@ -116,7 +116,7 @@ export default function RecommendationsPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Recommendations</h1>
           <p className="text-sm text-slate-500 mt-1">
-            Review and approve optimization suggestions from the Agent
+            Review and apply optimization suggestions from the Agent
           </p>
         </div>
         <div className="flex items-center gap-2">
