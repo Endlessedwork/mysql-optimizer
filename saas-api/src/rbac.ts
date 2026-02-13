@@ -1,8 +1,9 @@
 import { FastifyInstance } from 'fastify';
+import { rbacPlugin } from './plugins/rbac';
 
-export function setupRBAC(app: FastifyInstance): void {
-  // RBAC plugin registration placeholder – extend when roles/policies are defined
-  app.decorate('rbac', {
-    check: async (_role: string, _resource: string, _action: string) => true
-  });
+export async function setupRBAC(app: FastifyInstance): Promise<void> {
+  // Register RBAC plugin with permission checking
+  await rbacPlugin(app);
+
+  app.log.info('RBAC setup completed');
 }

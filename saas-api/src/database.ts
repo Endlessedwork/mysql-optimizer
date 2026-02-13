@@ -1,6 +1,6 @@
 import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 
-let pool: Pool;
+export let pool: Pool;
 
 export async function connectDB() {
   try {
