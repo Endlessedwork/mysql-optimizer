@@ -1,0 +1,98 @@
+# ==============================================
+# MySQL Optimizer - Easypanel Production Compose
+# ==============================================
+# ใช้สำหรับ deploy บน Easypanel
+# - ไม่มี test MySQL container
+# - ไม่มี Agent (deploy แยก หรือเพิ่มทีหลัง)
+# - Optimized for production
+# ==============================================
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-mysql_optimizer}
+      POSTGRES_USER: ${POSTGRES_USER:-optimizer_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-optimizer_user} -d ${POSTGRES_DB:-mysql_optimizer}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - optimizer-network
+
+  # SaaS API Service
+  saas-api:
+    build:
+      context: ./saas-api
+      dockerfile: Dockerfile
+      target: production
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3001
+      DATABASE_URL: postgres://${POSTGRES_USER:-optimizer_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mysql_optimizer}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      API_SECRET: ${API_SECRET:?API_SECRET is required}
+      TENANT_ID: ${TENANT_ID:-00000000-0000-0000-0000-000000000000}
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+    expose:
+      - "3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - optimizer-network
+
+  # Admin UI Service
+  admin-ui:
+    build:
+      context: ./admin-ui
+      dockerfile: Dockerfile
+      target: production
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?NEXT_PUBLIC_API_BASE_URL is required}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      API_SECRET: ${API_SECRET}
+      API_BASE_URL: http://saas-api:3001
+      TENANT_ID: ${TENANT_ID:-00000000-0000-0000-0000-000000000000}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:?ADMIN_USERNAME is required}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+    expose:
+      - "3000"
+    depends_on:
+      saas-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - optimizer-network
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  optimizer-network:
+    driver: bridge
