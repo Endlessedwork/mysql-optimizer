@@ -1,6 +1,9 @@
-import { FastifyJWT } from '@fastify/jwt';
+import { FastifyInstance } from 'fastify';
 import crypto from 'crypto';
 import { UserRole } from '../models/users.model';
+
+// Type for Fastify JWT instance
+type JWTInstance = FastifyInstance['jwt'];
 
 export interface TokenPayload {
   userId: string;
@@ -38,7 +41,7 @@ export class TokenService {
    */
   async generateTokens(
     payload: TokenPayload,
-    jwt: FastifyJWT,
+    jwt: JWTInstance,
     rememberMe: boolean = false
   ): Promise<GenerateTokensResult> {
     // Generate unique JTI for access token
@@ -78,7 +81,7 @@ export class TokenService {
   /**
    * Verify and decode access token
    */
-  verifyAccessToken(token: string, jwt: FastifyJWT): TokenPayload & { jti: string } {
+  verifyAccessToken(token: string, jwt: JWTInstance): TokenPayload & { jti: string } {
     try {
       const decoded = jwt.verify(token) as any;
       return {

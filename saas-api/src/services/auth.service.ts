@@ -1,6 +1,9 @@
 import { Pool } from 'pg';
-import { FastifyJWT } from '@fastify/jwt';
+import { FastifyInstance } from 'fastify';
 import { UsersModel, User, UserRole } from '../models/users.model';
+
+// Type for Fastify JWT instance
+type JWTInstance = FastifyInstance['jwt'];
 import { SessionsModel, UserSession, RefreshToken } from '../models/sessions.model';
 import { passwordService } from './password.service';
 import { tokenService, TokenPayload } from './token.service';
@@ -50,7 +53,7 @@ export class AuthService {
    */
   async login(
     credentials: LoginCredentials,
-    jwt: FastifyJWT,
+    jwt: JWTInstance,
     ipAddress: string,
     userAgent?: string
   ): Promise<LoginResult> {
@@ -213,7 +216,7 @@ export class AuthService {
    */
   async refreshToken(
     refreshTokenString: string,
-    jwt: FastifyJWT
+    jwt: JWTInstance
   ): Promise<RefreshResult> {
     const tokenHash = tokenService.hashToken(refreshTokenString);
 

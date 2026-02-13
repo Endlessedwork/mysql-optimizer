@@ -327,10 +327,10 @@ export default async function usersRoutes(fastify: FastifyInstance) {
         },
       },
     },
-    async (request: FastifyRequest<{ Params: { userId: string } }>, reply: FastifyReply) => {
+    async (request, reply) => {
       try {
         const currentUser = request.user as JWTPayload;
-        const { userId } = request.params;
+        const { userId } = request.params as { userId: string };
 
         // Check access permission
         const canAccess = await usersModel.canAccessUser(currentUser.id, userId);
@@ -419,10 +419,10 @@ export default async function usersRoutes(fastify: FastifyInstance) {
         },
       },
     },
-    async (request: FastifyRequest<{ Params: { userId: string } }>, reply: FastifyReply) => {
+    async (request, reply) => {
       try {
         const currentUser = request.user as JWTPayload;
-        const { userId } = request.params;
+        const { userId } = request.params as { userId: string };
         const body = updateUserSchema.parse(request.body);
 
         // Check if user exists
@@ -524,10 +524,10 @@ export default async function usersRoutes(fastify: FastifyInstance) {
         },
       },
     },
-    async (request: FastifyRequest<{ Params: { userId: string } }>, reply: FastifyReply) => {
+    async (request, reply) => {
       try {
         const currentUser = request.user as JWTPayload;
-        const { userId } = request.params;
+        const { userId } = request.params as { userId: string };
         const body = updateUserStatusSchema.parse(request.body);
 
         // Cannot disable self
@@ -603,10 +603,10 @@ export default async function usersRoutes(fastify: FastifyInstance) {
         },
       },
     },
-    async (request: FastifyRequest<{ Params: { userId: string } }>, reply: FastifyReply) => {
+    async (request, reply) => {
       try {
         const currentUser = request.user as JWTPayload;
-        const { userId } = request.params;
+        const { userId } = request.params as { userId: string };
 
         // Cannot delete self
         if (userId === currentUser.id) {
@@ -689,9 +689,9 @@ export default async function usersRoutes(fastify: FastifyInstance) {
         },
       },
     },
-    async (request: FastifyRequest<{ Params: { userId: string } }>, reply: FastifyReply) => {
+    async (request, reply) => {
       try {
-        const { userId } = request.params;
+        const { userId } = request.params as { userId: string };
 
         await authService.unlockAccount(userId);
 
