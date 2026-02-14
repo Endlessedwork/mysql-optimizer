@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { authenticate } from '../middleware/auth';
+import { recordAgentPoll } from '../utils/agent-heartbeat';
 import {
   getScanRuns,
   getScanRunById,
@@ -29,7 +30,12 @@ export default async function scanRunsRoutes(fastify: FastifyInstance) {
     try {
       const query = request.query as { connectionProfileId?: string; status?: string };
       const tenantId = (request as any).tenantId || process.env.TENANT_ID;
-      
+
+      // Record heartbeat when Agent polls for pending scans
+      if (query.status === 'pending') {
+        recordAgentPoll();
+      }
+
       const scanRuns = await getScanRuns({
         tenantId,
         connectionProfileId: query.connectionProfileId,
@@ -178,6 +184,7 @@ export default async function scanRunsRoutes(fastify: FastifyInstance) {
   // POST /api/scan-runs/:id/schema-snapshot - Create schema snapshot
   fastify.post('/api/scan-runs/:id/schema-snapshot', {
     preHandler: [authenticate],
+    bodyLimit: 10 * 1024 * 1024, // 10MB — schema data can be large
     schema: {
       params: {
         type: 'object',

@@ -293,6 +293,7 @@ export default async function recommendationsRoutes(fastify: FastifyInstance) {
   // POST /api/recommendations - Create a new recommendation pack (for Agent)
   fastify.post('/api/recommendations', {
     preHandler: [authenticate],
+    bodyLimit: 10 * 1024 * 1024, // 10MB — agent can send 300+ recommendations
     schema: {
       body: {
         type: 'object',
@@ -436,8 +437,18 @@ export default async function recommendationsRoutes(fastify: FastifyInstance) {
         });
       }
 
+      // Check for existing execution (prevent duplicates)
+      const { findExistingFixExecution, createSingleFixExecution } = await import('../models/executions.model');
+      const existing = await findExistingFixExecution(id, recommendationIndex, fixIndex);
+      if (existing) {
+        return reply.status(409).send({
+          success: false,
+          error: 'This fix has already been queued or executed',
+          data: existing
+        });
+      }
+
       // Create an execution record for this single fix
-      const { createSingleFixExecution } = await import('../models/executions.model');
       const execution = await createSingleFixExecution({
         recommendationPackId: id,
         connectionId: detail.connectionId,
@@ -457,6 +468,36 @@ export default async function recommendationsRoutes(fastify: FastifyInstance) {
       return reply.status(500).send({
         success: false,
         error: 'Failed to queue fix execution'
+      });
+    }
+  });
+
+  // GET /api/recommendations/:id/fix-statuses - Get execution statuses for all fixes in a pack
+  fastify.get('/api/recommendations/:id/fix-statuses', {
+    preHandler: [authenticate],
+    schema: {
+      params: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' }
+        },
+        required: ['id']
+      }
+    }
+  }, async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const { getFixExecutionStatuses } = await import('../models/executions.model');
+      const statuses = await getFixExecutionStatuses(id);
+      return {
+        success: true,
+        data: statuses
+      };
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({
+        success: false,
+        error: 'Failed to fetch fix execution statuses'
       });
     }
   });
