@@ -44,6 +44,15 @@ const registerSchema = z.object({
   fullName: z.string().min(1, 'Full name is required').max(255),
 });
 
+const forgotPasswordSchema = z.object({
+  email: z.string().email('Invalid email format'),
+});
+
+const resetPasswordSchema = z.object({
+  token: z.string().min(1, 'Token is required'),
+  newPassword: z.string().min(8, 'Password must be at least 8 characters'),
+});
+
 // In-memory store for OAuth state tokens (CSRF protection)
 const oauthStateTokens = new Map<string, number>();
 
@@ -616,9 +625,152 @@ export default async function authRoutes(fastify: FastifyInstance) {
     }
   );
 
+  /**
+   * POST /auth/forgot-password
+   * Request password reset email
+   */
+  fastify.post(
+    '/auth/forgot-password',
+    {
+      config: {
+        rateLimit: {
+          max: 3,
+          timeWindow: '15 minutes',
+        },
+      },
+      schema: {
+        description: 'Request password reset email',
+        tags: ['Password Management'],
+        body: {
+          type: 'object',
+          required: ['email'],
+          properties: {
+            email: { type: 'string', format: 'email' },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              success: { type: 'boolean' },
+              message: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const body = forgotPasswordSchema.parse(request.body);
+
+        await authService.requestPasswordReset(body.email, request.ip);
+
+        // Always return success (prevent email enumeration)
+        fastify.log.info({
+          event: 'forgot_password_requested',
+          email: body.email,
+          ip: request.ip,
+        });
+
+        return reply.send({
+          success: true,
+          message: 'If an account exists with this email, a reset link has been sent.',
+        });
+      } catch (error: any) {
+        fastify.log.error({
+          event: 'forgot_password_failed',
+          error: error.message,
+          ip: request.ip,
+        });
+
+        // Still return success to prevent enumeration
+        return reply.send({
+          success: true,
+          message: 'If an account exists with this email, a reset link has been sent.',
+        });
+      }
+    }
+  );
+
+  /**
+   * POST /auth/reset-password
+   * Reset password using token
+   */
+  fastify.post(
+    '/auth/reset-password',
+    {
+      config: {
+        rateLimit: {
+          max: 5,
+          timeWindow: '15 minutes',
+        },
+      },
+      schema: {
+        description: 'Reset password using reset token',
+        tags: ['Password Management'],
+        body: {
+          type: 'object',
+          required: ['token', 'newPassword'],
+          properties: {
+            token: { type: 'string' },
+            newPassword: { type: 'string', minLength: 8 },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              success: { type: 'boolean' },
+              message: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const body = resetPasswordSchema.parse(request.body);
+
+        await authService.resetPassword(body.token, body.newPassword, request.ip);
+
+        fastify.log.info({
+          event: 'password_reset_success',
+          ip: request.ip,
+        });
+
+        return reply.send({
+          success: true,
+          message: 'Password has been reset successfully. Please login with your new password.',
+        });
+      } catch (error: any) {
+        fastify.log.warn({
+          event: 'password_reset_failed',
+          error: error.message,
+          ip: request.ip,
+        });
+
+        if (error.message.startsWith('AUTH_')) {
+          const [code, ...messageParts] = error.message.split(': ');
+          const message = messageParts.join(': ');
+
+          return reply.status(400).send({
+            success: false,
+            error: { code, message },
+          });
+        }
+
+        return reply.status(500).send({
+          success: false,
+          error: {
+            code: 'SERVER_ERROR',
+            message: 'Failed to reset password',
+          },
+        });
+      }
+    }
+  );
+
   // TODO: Implement these endpoints:
-  // - POST /auth/forgot-password
-  // - POST /auth/reset-password
   // - GET /auth/verify-email/:token
   // - POST /auth/resend-verification
 

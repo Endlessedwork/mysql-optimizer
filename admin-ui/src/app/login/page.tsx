@@ -25,10 +25,15 @@ function LoginForm() {
   const { login } = useAuth();
   const searchParams = useSearchParams();
 
+  const [resetSuccess, setResetSuccess] = useState(false);
+
   useEffect(() => {
     const oauthError = searchParams.get('error');
     if (oauthError && OAUTH_ERROR_MESSAGES[oauthError]) {
       setError(OAUTH_ERROR_MESSAGES[oauthError]);
+    }
+    if (searchParams.get('reset') === 'success') {
+      setResetSuccess(true);
     }
   }, [searchParams]);
 
@@ -61,6 +66,12 @@ function LoginForm() {
 
         {/* Login Form */}
         <div className="bg-white rounded-lg shadow-xl p-8">
+          {resetSuccess && (
+            <div className="mb-4 bg-teal-50 border border-teal-200 text-teal-700 px-4 py-3 rounded-md text-sm">
+              Password reset successfully. Please sign in with your new password.
+            </div>
+          )}
+
           {error && (
             <div className="mb-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md text-sm">
               {error}
@@ -127,9 +138,14 @@ function LoginForm() {
 
             {/* Password Field */}
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
-                Password
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label htmlFor="password" className="block text-sm font-medium text-gray-700">
+                  Password
+                </label>
+                <Link href="/forgot-password" className="text-xs text-teal-600 hover:text-teal-700">
+                  Forgot password?
+                </Link>
+              </div>
               <input
                 id="password"
                 name="password"

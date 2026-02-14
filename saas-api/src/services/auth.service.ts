@@ -5,9 +5,11 @@ import { UsersModel, User, UserRole } from '../models/users.model';
 // Type for Fastify JWT instance
 type JWTInstance = FastifyInstance['jwt'];
 import { SessionsModel, UserSession, RefreshToken } from '../models/sessions.model';
+import { PasswordResetModel } from '../models/password-reset.model';
 import { TenantsModel } from '../models/tenants.model';
 import { passwordService } from './password.service';
 import { tokenService, TokenPayload } from './token.service';
+import { emailService } from './email.service';
 import { GoogleProfile } from './google-oauth.service';
 
 export interface LoginCredentials {
@@ -44,6 +46,7 @@ export interface RegisterCredentials {
 export class AuthService {
   private usersModel: UsersModel;
   private sessionsModel: SessionsModel;
+  private passwordResetModel: PasswordResetModel;
   private tenantsModel: TenantsModel;
   private maxFailedAttempts: number;
   private lockoutDurationMinutes: number;
@@ -51,6 +54,7 @@ export class AuthService {
   constructor(private pool: Pool) {
     this.usersModel = new UsersModel(pool);
     this.sessionsModel = new SessionsModel(pool);
+    this.passwordResetModel = new PasswordResetModel(pool);
     this.tenantsModel = new TenantsModel(pool);
     this.maxFailedAttempts = parseInt(process.env.ACCOUNT_LOCKOUT_ATTEMPTS || '10');
     this.lockoutDurationMinutes = parseInt(
@@ -371,6 +375,118 @@ export class AuthService {
 
       // Revoke all other sessions for security
       await this.sessionsModel.revokeAllUserSessions(userId, undefined, userId, client);
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Request password reset - generates token and sends email
+   * Returns success even if email not found (prevents email enumeration)
+   */
+  async requestPasswordReset(email: string, ipAddress: string): Promise<void> {
+    const user = await this.usersModel.findByEmail(email);
+
+    // Silent return if user not found (prevent email enumeration)
+    if (!user) {
+      return;
+    }
+
+    // Don't allow reset for SSO-only accounts (no password set)
+    if (!user.passwordHash) {
+      return;
+    }
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Invalidate all existing reset tokens for this user
+      await this.passwordResetModel.invalidateAllForUser(user.id, client);
+
+      // Generate new reset token
+      const { token, hash } = tokenService.generateResetToken();
+      const expiresAt = tokenService.getResetTokenExpiry();
+
+      // Store hashed token in DB
+      await this.passwordResetModel.create(
+        {
+          userId: user.id,
+          tokenHash: hash,
+          expiresAt,
+          ipAddress,
+        },
+        client
+      );
+
+      await client.query('COMMIT');
+
+      // Build reset URL and send email (outside transaction)
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      const resetUrl = `${frontendUrl}/reset-password?token=${token}`;
+
+      await emailService.sendPasswordResetEmail(user.email, resetUrl, user.fullName);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Reset password using token
+   * Validates token, updates password, revokes all sessions
+   */
+  async resetPassword(
+    token: string,
+    newPassword: string,
+    ipAddress: string
+  ): Promise<void> {
+    // Validate new password
+    const validation = passwordService.validate(newPassword);
+    if (!validation.valid) {
+      throw new Error(`AUTH_008: ${validation.errors.join(', ')}`);
+    }
+
+    // Hash the token to look up in DB
+    const tokenHash = tokenService.hashToken(token);
+
+    // Find valid token
+    const resetToken = await this.passwordResetModel.findByTokenHash(tokenHash);
+    if (!resetToken) {
+      throw new Error('AUTH_010: Invalid or expired reset token');
+    }
+
+    // Hash new password
+    const newPasswordHash = await passwordService.hash(newPassword);
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Update user's password
+      await this.usersModel.update(
+        resetToken.userId,
+        { passwordHash: newPasswordHash },
+        client
+      );
+
+      // Mark token as used
+      await this.passwordResetModel.markAsUsed(tokenHash, client);
+
+      // Revoke all sessions (force re-login on all devices)
+      await this.sessionsModel.revokeAllUserSessions(
+        resetToken.userId,
+        undefined,
+        resetToken.userId,
+        client
+      );
 
       await client.query('COMMIT');
     } catch (error) {
