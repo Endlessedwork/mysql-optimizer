@@ -26,6 +26,10 @@ export type Recommendation = {
   createdAt: string
   updatedAt: string
   status: RecommendationStatus
+  // Fix tracking
+  totalFixes?: number
+  appliedFixes?: number
+  failedFixes?: number
   // Dev-friendly summary stats
   totalCount?: number
   severityCounts?: {
@@ -193,6 +197,8 @@ export type Execution = {
   connectionId: string
   connectionName?: string
   databaseName?: string
+  recommendationPackId?: string
+  recommendationIndex?: number | null
   status: 'pending' | 'running' | 'completed' | 'failed' | 'rolled_back'
   startedAt: string
   completedAt: string | null
