@@ -23,6 +23,12 @@ export interface LoginCredentials {
   rememberMe?: boolean;
 }
 
+export interface RegisterCredentials {
+  email: string;
+  password: string;
+  fullName: string;
+}
+
 export interface LoginResponse {
   success: boolean;
   accessToken: string;
@@ -67,6 +73,35 @@ class AuthAPI {
     }
 
     return data;
+  }
+
+  /**
+   * Register with email and password
+   */
+  async register(credentials: RegisterCredentials): Promise<LoginResponse> {
+    const response = await fetch(`${this.baseURL}/auth/register`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      credentials: 'include',
+      body: JSON.stringify(credentials),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error?.message || 'Registration failed');
+    }
+
+    return data;
+  }
+
+  /**
+   * Get Google OAuth URL
+   */
+  getGoogleAuthUrl(): string {
+    return `${this.baseURL}/auth/google`;
   }
 
   /**
@@ -159,6 +194,42 @@ class AuthAPI {
 
     const data = await response.json();
     return data.sessions;
+  }
+
+  /**
+   * Request password reset email
+   */
+  async forgotPassword(email: string): Promise<void> {
+    const response = await fetch(`${this.baseURL}/auth/forgot-password`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ email }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json();
+      throw new Error(data.error?.message || 'Failed to request password reset');
+    }
+  }
+
+  /**
+   * Reset password using token
+   */
+  async resetPassword(token: string, newPassword: string): Promise<void> {
+    const response = await fetch(`${this.baseURL}/auth/reset-password`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ token, newPassword }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json();
+      throw new Error(data.error?.message || 'Failed to reset password');
+    }
   }
 
   /**
