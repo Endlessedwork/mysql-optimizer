@@ -1,12 +1,14 @@
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { FastifyInstance } from 'fastify';
 import { UsersModel, User, UserRole } from '../models/users.model';
 
 // Type for Fastify JWT instance
 type JWTInstance = FastifyInstance['jwt'];
 import { SessionsModel, UserSession, RefreshToken } from '../models/sessions.model';
+import { TenantsModel } from '../models/tenants.model';
 import { passwordService } from './password.service';
 import { tokenService, TokenPayload } from './token.service';
+import { GoogleProfile } from './google-oauth.service';
 
 export interface LoginCredentials {
   email: string;
@@ -33,15 +35,23 @@ export interface RefreshResult {
   expiresIn: number;
 }
 
+export interface RegisterCredentials {
+  email: string;
+  password: string;
+  fullName: string;
+}
+
 export class AuthService {
   private usersModel: UsersModel;
   private sessionsModel: SessionsModel;
+  private tenantsModel: TenantsModel;
   private maxFailedAttempts: number;
   private lockoutDurationMinutes: number;
 
   constructor(private pool: Pool) {
     this.usersModel = new UsersModel(pool);
     this.sessionsModel = new SessionsModel(pool);
+    this.tenantsModel = new TenantsModel(pool);
     this.maxFailedAttempts = parseInt(process.env.ACCOUNT_LOCKOUT_ATTEMPTS || '10');
     this.lockoutDurationMinutes = parseInt(
       process.env.ACCOUNT_LOCKOUT_DURATION_MINUTES || '30'
@@ -376,5 +386,234 @@ export class AuthService {
    */
   async unlockAccount(userId: string): Promise<void> {
     await this.usersModel.unlockAccount(userId);
+  }
+
+  /**
+   * Register with email and password (self-registration)
+   * Creates a new tenant and user in a single transaction
+   */
+  async registerWithEmail(
+    credentials: RegisterCredentials,
+    jwt: JWTInstance,
+    ipAddress: string,
+    userAgent?: string
+  ): Promise<LoginResult> {
+    const { email, password, fullName } = credentials;
+
+    // Validate password strength before transaction
+    const validation = passwordService.validate(password);
+    if (!validation.valid) {
+      throw new Error(`AUTH_008: ${validation.errors.join(', ')}`);
+    }
+
+    const passwordHash = await passwordService.hash(password);
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Check uniqueness inside transaction to prevent race conditions
+      const existingUser = await this.usersModel.findByEmail(email, client);
+      if (existingUser) {
+        throw new Error('AUTH_009: Email already registered');
+      }
+
+      // Create tenant for the new user
+      const tenant = await this.tenantsModel.create(
+        { name: `${fullName}'s Workspace` },
+        client
+      );
+
+      // Create user as admin of their own tenant
+      const user = await this.usersModel.create(
+        {
+          tenantId: tenant.id,
+          email,
+          passwordHash,
+          fullName,
+          role: 'admin',
+          status: 'active',
+          emailVerified: false,
+        },
+        client
+      );
+
+      const result = await this.createSessionInTransaction(user, jwt, ipAddress, userAgent, client);
+
+      await client.query('COMMIT');
+
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Login or register with Google OAuth
+   * - If user exists by google_id → login
+   * - If user exists by email → link Google account and login
+   * - If new user → create tenant + user and login
+   */
+  async loginOrRegisterWithGoogle(
+    profile: GoogleProfile,
+    jwt: JWTInstance,
+    ipAddress: string,
+    userAgent?: string
+  ): Promise<LoginResult> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // 1. Check if user exists by google_id
+      let user = await this.usersModel.findByGoogleId(profile.googleId, client);
+
+      if (user) {
+        this.validateAccountStatus(user);
+        const result = await this.createSessionInTransaction(user, jwt, ipAddress, userAgent, client);
+        await client.query('COMMIT');
+        return result;
+      }
+
+      // 2. Check if user exists by email (auto-link)
+      user = await this.usersModel.findByEmail(profile.email, client);
+
+      if (user) {
+        this.validateAccountStatus(user);
+        // Link Google account to existing user
+        const updatedUser = await this.usersModel.update(user.id, {
+          googleId: profile.googleId,
+          avatarUrl: profile.avatarUrl || user.avatarUrl,
+          emailVerified: true,
+        }, client);
+
+        const result = await this.createSessionInTransaction(
+          updatedUser || user, jwt, ipAddress, userAgent, client
+        );
+        await client.query('COMMIT');
+        return result;
+      }
+
+      // 3. New user - create tenant and user
+      const tenant = await this.tenantsModel.create(
+        { name: `${profile.fullName}'s Workspace`, allowGoogleSso: true },
+        client
+      );
+
+      const newUser = await this.usersModel.create(
+        {
+          tenantId: tenant.id,
+          email: profile.email,
+          fullName: profile.fullName,
+          role: 'admin',
+          status: 'active',
+          emailVerified: profile.emailVerified,
+        },
+        client
+      );
+
+      // Set google_id and avatar
+      const finalUser = await this.usersModel.update(
+        newUser.id,
+        { googleId: profile.googleId, avatarUrl: profile.avatarUrl },
+        client
+      );
+
+      const result = await this.createSessionInTransaction(
+        finalUser || newUser, jwt, ipAddress, userAgent, client
+      );
+
+      await client.query('COMMIT');
+
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Validate account status, throw if disabled or locked
+   */
+  private validateAccountStatus(user: User): void {
+    if (user.status === 'disabled') {
+      throw new Error('AUTH_007: Account has been disabled');
+    }
+    if (user.lockedUntil && new Date(user.lockedUntil) > new Date()) {
+      throw new Error('AUTH_002: Account is locked');
+    }
+  }
+
+  /**
+   * Map User to LoginResult user shape
+   */
+  private mapUserToResponse(user: User) {
+    return {
+      id: user.id,
+      email: user.email,
+      fullName: user.fullName,
+      role: user.role,
+      tenantId: user.tenantId,
+      avatarUrl: user.avatarUrl,
+    };
+  }
+
+  /**
+   * Create session, tokens, and return LoginResult within an existing transaction
+   */
+  private async createSessionInTransaction(
+    user: User,
+    jwt: JWTInstance,
+    ipAddress: string,
+    userAgent: string | undefined,
+    client: PoolClient,
+    rememberMe: boolean = false
+  ): Promise<LoginResult> {
+    const tokenPayload: TokenPayload = {
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      tenantId: user.tenantId,
+    };
+
+    const tokens = await tokenService.generateTokens(tokenPayload, jwt, rememberMe);
+
+    const refreshTokenExpiry = tokenService.getRefreshTokenExpiry(rememberMe);
+    const refreshToken = await this.sessionsModel.createRefreshToken(
+      {
+        userId: user.id,
+        tokenHash: tokens.refreshTokenHash,
+        expiresAt: refreshTokenExpiry,
+        ipAddress,
+        userAgent,
+      },
+      client
+    );
+
+    const accessTokenExpiry = new Date(Date.now() + tokens.expiresIn * 1000);
+    await this.sessionsModel.createSession(
+      {
+        userId: user.id,
+        accessTokenJti: tokens.jti,
+        refreshTokenId: refreshToken.id,
+        ipAddress,
+        userAgent,
+        expiresAt: accessTokenExpiry,
+      },
+      client
+    );
+
+    await this.usersModel.updateLoginTracking(user.id, ipAddress, client);
+
+    return {
+      user: this.mapUserToResponse(user),
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      expiresIn: tokens.expiresIn,
+    };
   }
 }

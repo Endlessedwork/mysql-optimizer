@@ -1,8 +1,10 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
+import crypto from 'crypto';
 import { pool } from '../database';
 import { AuthService } from '../services/auth.service';
 import { UsersModel } from '../models/users.model';
+import { GoogleOAuthService } from '../services/google-oauth.service';
 
 // JWT payload type
 interface JWTPayload {
@@ -36,10 +38,40 @@ const changePasswordSchema = z.object({
   newPassword: z.string().min(8, 'New password must be at least 8 characters'),
 });
 
+const registerSchema = z.object({
+  email: z.string().email('Invalid email format'),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+  fullName: z.string().min(1, 'Full name is required').max(255),
+});
+
+// In-memory store for OAuth state tokens (CSRF protection)
+const oauthStateTokens = new Map<string, number>();
+
+// Clean expired state tokens every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [state, createdAt] of oauthStateTokens) {
+    if (now - createdAt > 10 * 60 * 1000) {
+      oauthStateTokens.delete(state);
+    }
+  }
+}, 5 * 60 * 1000);
+
 export default async function authRoutes(fastify: FastifyInstance) {
   // Initialize services inside the function to ensure pool is available
   const authService = new AuthService(pool);
   const usersModel = new UsersModel(pool);
+
+  // Initialize Google OAuth (optional - only if env vars are set)
+  let googleOAuthService: GoogleOAuthService | null = null;
+  if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+    try {
+      googleOAuthService = new GoogleOAuthService();
+      fastify.log.info('Google OAuth service initialized');
+    } catch (error: any) {
+      fastify.log.warn('Google OAuth not configured: ' + error.message);
+    }
+  }
   /**
    * POST /auth/login
    * Login with email and password
@@ -584,11 +616,228 @@ export default async function authRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // TODO: Phase 2 - Implement these endpoints:
+  // TODO: Implement these endpoints:
   // - POST /auth/forgot-password
   // - POST /auth/reset-password
   // - GET /auth/verify-email/:token
   // - POST /auth/resend-verification
-  // - GET /auth/google (Google OAuth initiation)
-  // - GET /auth/google/callback (Google OAuth callback)
+
+  /**
+   * POST /auth/register
+   * Self-registration with email and password
+   */
+  fastify.post(
+    '/auth/register',
+    {
+      config: {
+        rateLimit: {
+          max: 3,
+          timeWindow: '15 minutes',
+        },
+      },
+      schema: {
+        description: 'Register a new account with email and password',
+        tags: ['Authentication'],
+        body: {
+          type: 'object',
+          required: ['email', 'password', 'fullName'],
+          properties: {
+            email: { type: 'string', format: 'email' },
+            password: { type: 'string', minLength: 8 },
+            fullName: { type: 'string', minLength: 1 },
+          },
+        },
+        response: {
+          201: {
+            type: 'object',
+            properties: {
+              success: { type: 'boolean' },
+              accessToken: { type: 'string' },
+              refreshToken: { type: 'string' },
+              user: { type: 'object' },
+              expiresIn: { type: 'number' },
+            },
+          },
+        },
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const body = registerSchema.parse(request.body);
+
+        const ipAddress = request.ip;
+        const userAgent = request.headers['user-agent'];
+
+        const result = await authService.registerWithEmail(
+          {
+            email: body.email,
+            password: body.password,
+            fullName: body.fullName,
+          },
+          fastify.jwt,
+          ipAddress,
+          userAgent
+        );
+
+        // Set cookies
+        reply.setCookie('access_token', result.accessToken, ACCESS_TOKEN_COOKIE_OPTIONS);
+        reply.setCookie('refresh_token', result.refreshToken, REFRESH_TOKEN_COOKIE_OPTIONS);
+
+        fastify.log.info({
+          event: 'register_success',
+          userId: result.user.id,
+          email: result.user.email,
+          ip: ipAddress,
+        });
+
+        return reply.status(201).send({
+          success: true,
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+          user: result.user,
+          expiresIn: result.expiresIn,
+        });
+      } catch (error: any) {
+        fastify.log.warn({
+          event: 'register_failed',
+          error: error.message,
+          ip: request.ip,
+        });
+
+        if (error.message.startsWith('AUTH_')) {
+          const [code, ...messageParts] = error.message.split(': ');
+          const message = messageParts.join(': ');
+
+          return reply.status(400).send({
+            success: false,
+            error: { code, message },
+          });
+        }
+
+        return reply.status(500).send({
+          success: false,
+          error: {
+            code: 'SERVER_ERROR',
+            message: 'An error occurred during registration',
+          },
+        });
+      }
+    }
+  );
+
+  /**
+   * GET /auth/google
+   * Redirect to Google OAuth consent screen
+   */
+  fastify.get(
+    '/auth/google',
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      if (!googleOAuthService) {
+        return reply.status(501).send({
+          success: false,
+          error: {
+            code: 'OAUTH_NOT_CONFIGURED',
+            message: 'Google OAuth is not configured',
+          },
+        });
+      }
+
+      // Generate CSRF state token
+      const state = crypto.randomBytes(32).toString('hex');
+      oauthStateTokens.set(state, Date.now());
+
+      const authUrl = googleOAuthService.getAuthorizationUrl(state);
+
+      return reply.redirect(authUrl);
+    }
+  );
+
+  /**
+   * GET /auth/google/callback
+   * Handle Google OAuth callback
+   */
+  fastify.get(
+    '/auth/google/callback',
+    {
+      schema: {
+        querystring: {
+          type: 'object',
+          properties: {
+            code: { type: 'string' },
+            state: { type: 'string' },
+            error: { type: 'string' },
+          },
+        },
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const query = request.query as { code?: string; state?: string; error?: string };
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+
+      // Handle Google OAuth error
+      if (query.error) {
+        fastify.log.warn({
+          event: 'google_oauth_error',
+          error: query.error,
+        });
+        return reply.redirect(`${frontendUrl}/login?error=oauth_denied`);
+      }
+
+      if (!query.code || !query.state) {
+        return reply.redirect(`${frontendUrl}/login?error=oauth_invalid`);
+      }
+
+      // Validate CSRF state token
+      if (!oauthStateTokens.has(query.state)) {
+        fastify.log.warn({
+          event: 'google_oauth_invalid_state',
+          ip: request.ip,
+        });
+        return reply.redirect(`${frontendUrl}/login?error=oauth_invalid_state`);
+      }
+      oauthStateTokens.delete(query.state);
+
+      if (!googleOAuthService) {
+        return reply.redirect(`${frontendUrl}/login?error=oauth_not_configured`);
+      }
+
+      try {
+        // Exchange code for Google profile
+        const profile = await googleOAuthService.verifyAndGetProfile(query.code);
+
+        const ipAddress = request.ip;
+        const userAgent = request.headers['user-agent'];
+
+        // Login or register with Google
+        const result = await authService.loginOrRegisterWithGoogle(
+          profile,
+          fastify.jwt,
+          ipAddress,
+          userAgent
+        );
+
+        // Set cookies
+        reply.setCookie('access_token', result.accessToken, ACCESS_TOKEN_COOKIE_OPTIONS);
+        reply.setCookie('refresh_token', result.refreshToken, REFRESH_TOKEN_COOKIE_OPTIONS);
+
+        fastify.log.info({
+          event: 'google_login_success',
+          userId: result.user.id,
+          email: result.user.email,
+          ip: ipAddress,
+        });
+
+        // Redirect to frontend
+        return reply.redirect(`${frontendUrl}/admin`);
+      } catch (error: any) {
+        fastify.log.error({
+          event: 'google_oauth_callback_failed',
+          error: error.message,
+          ip: request.ip,
+        });
+
+        return reply.redirect(`${frontendUrl}/login?error=oauth_failed`);
+      }
+    }
+  );
 }

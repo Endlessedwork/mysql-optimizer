@@ -6,6 +6,7 @@ export function middleware(request: NextRequest) {
   // Allow public routes
   if (
     pathname === '/login' ||
+    pathname === '/register' ||
     pathname.startsWith('/api/') ||
     pathname.startsWith('/_next/') ||
     pathname.startsWith('/favicon.ico')

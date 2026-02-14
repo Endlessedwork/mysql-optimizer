@@ -55,7 +55,7 @@ export async function jwtPlugin(fastify: FastifyInstance) {
 export const ACCESS_TOKEN_COOKIE_OPTIONS = {
   httpOnly: true,
   secure: process.env.NODE_ENV === 'production',
-  sameSite: 'strict' as const,
+  sameSite: 'lax' as const, // 'lax' required for OAuth redirect flow
   path: '/',
   maxAge: 8 * 60 * 60, // 8 hours in seconds
 };
@@ -66,8 +66,8 @@ export const ACCESS_TOKEN_COOKIE_OPTIONS = {
 export const REFRESH_TOKEN_COOKIE_OPTIONS = {
   httpOnly: true,
   secure: process.env.NODE_ENV === 'production',
-  sameSite: 'strict' as const,
-  path: '/auth/refresh', // Only sent to refresh endpoint
+  sameSite: 'lax' as const, // 'lax' required for OAuth redirect flow
+  path: '/',
   maxAge: 30 * 24 * 60 * 60, // 30 days in seconds
 };
 
@@ -77,7 +77,7 @@ export const REFRESH_TOKEN_COOKIE_OPTIONS = {
 export const CLEAR_COOKIE_OPTIONS = {
   httpOnly: true,
   secure: process.env.NODE_ENV === 'production',
-  sameSite: 'strict' as const,
+  sameSite: 'lax' as const,
   path: '/',
   maxAge: 0,
 };
