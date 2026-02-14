@@ -1,13 +1,14 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import Link from 'next/link';
 import type { RecommendationDetail as RecommendationDetailType, RawRecommendation, FixOption, RecommendationStep } from '@/lib/types';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { ReportPreviewModal } from '@/components/ui/ReportPreviewModal';
 import { RecommendationActions } from './RecommendationActions';
 import { StepRoadmap } from './StepRoadmap';
-import { exportRecommendationReport, getRecommendationReportContent, executeSingleFix, executeRecommendationStep } from '@/lib/api-client';
+import { exportRecommendationReport, getRecommendationReportContent, executeSingleFix, executeRecommendationStep, getFixStatuses } from '@/lib/api-client';
 import { CodeBlock } from '@/components/ui/CodeBlock';
 import {
   AlertTriangle,
@@ -23,7 +24,8 @@ import {
   Database,
   Zap,
   Play,
-  Loader2
+  Loader2,
+  ExternalLink
 } from 'lucide-react';
 
 interface RecommendationDetailProps {
@@ -63,7 +65,12 @@ const getTypeName = (type: string): string => {
     'slow_query': 'Slow Query',
     'inefficient_query': 'Inefficient Query',
     'missing_index': 'Missing Index',
-    'large_table': 'Large Table'
+    'large_table': 'Large Table',
+    'duplicate_index': 'Duplicate Index',
+    'redundant_index': 'Redundant Index',
+    'low_cardinality_index': 'Low Cardinality Index',
+    'unindexed_foreign_key': 'Unindexed Foreign Key',
+    'lock_contention': 'Lock Contention'
   };
   return names[type] || type.replace(/_/g, ' ');
 };
@@ -113,18 +120,34 @@ const RecommendationRow = ({
   rec,
   index,
   packId,
+  initialApplied = false,
+  executionId: initialExecutionId,
+  executionStatus,
   onApply,
   onApplyResult
 }: {
   rec: RawRecommendation;
   index: number;
   packId: string;
+  initialApplied?: boolean;
+  executionId?: string;
+  executionStatus?: string;
   onApply?: (rec: RawRecommendation) => void;
   onApplyResult?: (success: boolean, message: string) => void;
 }) => {
   const [expanded, setExpanded] = useState(false);
   const [applying, setApplying] = useState(false);
-  const [applied, setApplied] = useState(false);
+  const [applied, setApplied] = useState(initialApplied);
+  const [currentExecutionId, setCurrentExecutionId] = useState(initialExecutionId);
+
+  // Sync when fixStatuses load async (initialApplied changes after mount)
+  useEffect(() => {
+    if (initialApplied) setApplied(true);
+  }, [initialApplied]);
+
+  useEffect(() => {
+    if (initialExecutionId) setCurrentExecutionId(initialExecutionId);
+  }, [initialExecutionId]);
 
   const evidence = rec.evidence?.metrics || {};
   const fixOption = rec.fix_options?.[0];
@@ -144,7 +167,11 @@ const RecommendationRow = ({
 
       if (result.ok && result.data) {
         setApplied(true);
+        setCurrentExecutionId(result.data.id);
         onApplyResult?.(true, `Fix queued successfully! Execution ID: ${result.data.id.substring(0, 8)}`);
+      } else if (result.status === 409) {
+        setApplied(true);
+        onApplyResult?.(false, 'This fix has already been queued or executed');
       } else {
         onApplyResult?.(false, result.error || 'Failed to queue fix');
       }
@@ -175,6 +202,13 @@ const RecommendationRow = ({
         <span className="text-xs font-mono text-slate-400 w-8">#{index + 1}</span>
 
         <SeverityBadge severity={rec.severity} />
+
+        {applied && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded border border-emerald-200 bg-emerald-50 text-emerald-700">
+            <CheckCircle2 className="w-3 h-3" />
+            Applied
+          </span>
+        )}
 
         <div className="flex-1 min-w-0">
           <div className="font-medium text-slate-900 truncate font-mono text-sm">
@@ -384,21 +418,32 @@ const RecommendationRow = ({
                         />
                       )}
 
-                      {/* Apply Button - only for non-multistep */}
-                      <Button
-                        variant={applied ? 'secondary' : 'primary'}
-                        size="sm"
-                        onClick={handleApply}
-                        disabled={applying || applied || !fixOption.implementation}
-                        icon={
-                          applying ? <Loader2 className="w-4 h-4 animate-spin" /> :
-                          applied ? <CheckCircle2 className="w-4 h-4" /> :
-                          <Play className="w-4 h-4" />
-                        }
-                        className="w-full"
-                      >
-                        {applying ? 'Queueing...' : applied ? 'Queued for Execution' : 'Apply This Fix'}
-                      </Button>
+                      {/* Apply Button or View Execution Link */}
+                      {applied && currentExecutionId ? (
+                        <Link
+                          href={`/admin/executions/${currentExecutionId}`}
+                          className="flex items-center justify-center gap-2 w-full px-4 py-2 text-sm font-medium rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <CheckCircle2 className="w-4 h-4" />
+                          {executionStatus === 'completed' ? 'ดูผลลัพธ์' : executionStatus === 'failed' ? 'ดูรายละเอียด (Failed)' : 'ดูสถานะ Execution'}
+                          <ExternalLink className="w-3.5 h-3.5 ml-auto opacity-50" />
+                        </Link>
+                      ) : (
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onClick={handleApply}
+                          disabled={applying || applied || !fixOption.implementation}
+                          icon={
+                            applying ? <Loader2 className="w-4 h-4 animate-spin" /> :
+                            <Play className="w-4 h-4" />
+                          }
+                          className="w-full"
+                        >
+                          {applying ? 'Queueing...' : 'Apply This Fix'}
+                        </Button>
+                      )}
                     </>
                   )}
                 </div>
@@ -462,6 +507,18 @@ export const RecommendationDetail = ({
   const [previewContent, setPreviewContent] = useState('');
   const [previewLoading, setPreviewLoading] = useState(false);
   const [applyNotification, setApplyNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Track which fixes have already been executed (from server)
+  const [fixStatuses, setFixStatuses] = useState<Record<string, { status: string; executionId: string }>>({});
+
+  useEffect(() => {
+    if (!recommendation?.id) return;
+    getFixStatuses(recommendation.id).then((result) => {
+      if (result.ok && result.data) {
+        setFixStatuses(result.data);
+      }
+    });
+  }, [recommendation?.id]);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -736,15 +793,35 @@ export const RecommendationDetail = ({
       <Card noPadding>
         <div className="divide-y divide-slate-100">
           {filteredRecs.length > 0 ? (
-            filteredRecs.map((rec, idx) => (
-              <RecommendationRow
-                key={rec.id || idx}
-                rec={rec}
-                index={idx}
-                packId={recommendation.id}
-                onApplyResult={handleApplyResult}
-              />
-            ))
+            filteredRecs.map((rec) => {
+              // Use original index in rawRecs (matches API fix-statuses key)
+              const originalIndex = rawRecs.indexOf(rec);
+              const fixKey = `${originalIndex}:0`;
+              const fixStatus = fixStatuses[fixKey];
+              const isApplied = fixStatus?.status === 'pending'
+                || fixStatus?.status === 'running'
+                || fixStatus?.status === 'completed';
+              return (
+                <RecommendationRow
+                  key={rec.id || originalIndex}
+                  rec={rec}
+                  index={originalIndex}
+                  packId={recommendation.id}
+                  initialApplied={isApplied}
+                  executionId={fixStatus?.executionId}
+                  executionStatus={fixStatus?.status}
+                  onApplyResult={(success, message) => {
+                    handleApplyResult(success, message);
+                    if (success) {
+                      setFixStatuses(prev => ({
+                        ...prev,
+                        [fixKey]: { status: 'pending', executionId: '' }
+                      }));
+                    }
+                  }}
+                />
+              );
+            })
           ) : (
             <div className="text-center py-12 text-slate-500">
               No recommendations match your filters

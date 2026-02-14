@@ -11,10 +11,13 @@ export class QueryAnalyzer {
   private indexCardinality: any[];
   private slowQueries: any[];
   private missingIndexes: any[];
+  private indexes: any[];
+  private foreignKeys: any[];
+  private lockStats: any;
 
   constructor(
-    queryDigests: any[], 
-    explainPlans: any[], 
+    queryDigests: any[],
+    explainPlans: any[],
     schemaSnapshot: any[],
     advancedStats?: {
       tableStats?: any[];
@@ -22,6 +25,9 @@ export class QueryAnalyzer {
       indexCardinality?: any[];
       slowQueries?: any[];
       missingIndexes?: any[];
+      indexes?: any[];
+      foreignKeys?: any[];
+      lockStats?: any;
     }
   ) {
     this.queryDigests = queryDigests;
@@ -32,6 +38,9 @@ export class QueryAnalyzer {
     this.indexCardinality = advancedStats?.indexCardinality || [];
     this.slowQueries = advancedStats?.slowQueries || [];
     this.missingIndexes = advancedStats?.missingIndexes || [];
+    this.indexes = advancedStats?.indexes || [];
+    this.foreignKeys = advancedStats?.foreignKeys || [];
+    this.lockStats = advancedStats?.lockStats || {};
   }
 
   analyze() {
@@ -64,7 +73,23 @@ export class QueryAnalyzer {
     // 6. Analyze missing indexes (ใหม่)
     const missingIndexFindings = this.analyzeMissingIndexes();
     findings.push(...missingIndexFindings);
-    
+
+    // 7. Analyze duplicate/redundant indexes
+    const duplicateFindings = this.analyzeDuplicateIndexes();
+    findings.push(...duplicateFindings);
+
+    // 8. Analyze low-cardinality indexes
+    const lowCardFindings = this.analyzeLowCardinalityIndexes();
+    findings.push(...lowCardFindings);
+
+    // 9. Analyze unindexed foreign keys
+    const unindexedFkFindings = this.analyzeUnindexedForeignKeys();
+    findings.push(...unindexedFkFindings);
+
+    // 10. Analyze lock contention
+    const lockFindings = this.analyzeLockContention();
+    findings.push(...lockFindings);
+
     // Deduplicate and rank findings
     return this.deduplicateAndRank(findings);
   }
@@ -330,30 +355,32 @@ export class QueryAnalyzer {
     const findings = [];
 
     for (const idx of this.indexUsage) {
-      // Check for unused indexes
+      // Every index with read_count=0 (except PRIMARY) is unused
       if (idx.read_count === 0 && idx.INDEX_NAME !== 'PRIMARY') {
-        const writeOps = (parseInt(idx.insert_count) || 0) + 
-                         (parseInt(idx.update_count) || 0) + 
+        const writeOps = (parseInt(idx.insert_count) || 0) +
+                         (parseInt(idx.update_count) || 0) +
                          (parseInt(idx.delete_count) || 0);
-        
-        if (writeOps > 100) {
-          findings.push({
-            type: 'unused_index',
-            severity: writeOps > 10000 ? 'high' : 'medium',
-            table: `${idx.OBJECT_SCHEMA}.${idx.OBJECT_NAME}`,
-            index: idx.INDEX_NAME,
-            evidence: {
-              read_count: idx.read_count,
-              write_overhead: writeOps,
-              index_name: idx.INDEX_NAME
-            },
-            impact: {
-              write_overhead: `${writeOps.toLocaleString()} write operations ต้อง maintain index นี้`,
-              storage: 'ใช้พื้นที่ disk โดยไม่จำเป็น'
-            },
-            recommendation: `พิจารณาลบ index: DROP INDEX ${idx.INDEX_NAME} ON ${idx.OBJECT_SCHEMA}.${idx.OBJECT_NAME};`
-          });
-        }
+
+        const severity = writeOps > 10000 ? 'high' : writeOps > 100 ? 'medium' : 'low';
+
+        findings.push({
+          type: 'unused_index',
+          severity,
+          table: `${idx.OBJECT_SCHEMA}.${idx.OBJECT_NAME}`,
+          index: idx.INDEX_NAME,
+          evidence: {
+            read_count: idx.read_count,
+            write_overhead: writeOps,
+            index_name: idx.INDEX_NAME
+          },
+          impact: {
+            write_overhead: writeOps > 0
+              ? `${writeOps.toLocaleString()} write operations ต้อง maintain index นี้`
+              : 'ไม่มี read ใดใช้ index นี้เลย (schema-level detection)',
+            storage: 'ใช้พื้นที่ disk โดยไม่จำเป็น'
+          },
+          recommendation: `พิจารณาลบ index: DROP INDEX ${idx.INDEX_NAME} ON ${idx.OBJECT_SCHEMA}.${idx.OBJECT_NAME};`
+        });
       }
     }
 
@@ -448,6 +475,250 @@ export class QueryAnalyzer {
             cumulative_impact: `${totalTimeSec.toFixed(2)} seconds total execution time`
           },
           recommendation: 'วิเคราะห์ WHERE clause และสร้าง index ที่เหมาะสม'
+        });
+      }
+    }
+
+    return findings;
+  }
+
+  /**
+   * วิเคราะห์ duplicate/redundant indexes จาก information_schema.STATISTICS
+   */
+  private analyzeDuplicateIndexes(): any[] {
+    if (this.indexes.length === 0) return [];
+
+    const findings: any[] = [];
+
+    // Group indexes by table: { "schema.table": { indexName: [col1, col2, ...] } }
+    const tableIndexes = new Map<string, Map<string, { columns: string[]; nonUnique: number }>>();
+
+    for (const idx of this.indexes) {
+      const tableKey = `${idx.TABLE_SCHEMA}.${idx.TABLE_NAME}`;
+      if (!tableIndexes.has(tableKey)) {
+        tableIndexes.set(tableKey, new Map());
+      }
+      const indexMap = tableIndexes.get(tableKey)!;
+      if (!indexMap.has(idx.INDEX_NAME)) {
+        indexMap.set(idx.INDEX_NAME, { columns: [], nonUnique: idx.NON_UNIQUE });
+      }
+      const entry = indexMap.get(idx.INDEX_NAME)!;
+      // Insert column at correct position based on SEQ_IN_INDEX
+      const seqIdx = (parseInt(idx.SEQ_IN_INDEX) || 1) - 1;
+      entry.columns[seqIdx] = idx.COLUMN_NAME;
+    }
+
+    // Compare indexes within each table
+    for (const [tableKey, indexMap] of tableIndexes) {
+      const indexEntries = Array.from(indexMap.entries());
+
+      for (let i = 0; i < indexEntries.length; i++) {
+        const [nameA, infoA] = indexEntries[i];
+        const sigA = infoA.columns.join(',');
+
+        for (let j = i + 1; j < indexEntries.length; j++) {
+          const [nameB, infoB] = indexEntries[j];
+          const sigB = infoB.columns.join(',');
+
+          // Determine drop candidate: keep PRIMARY > UNIQUE > shorter name
+          const pickDrop = (a: string, infoA: { nonUnique: number }, b: string, infoB: { nonUnique: number }): { keep: string; drop: string } => {
+            if (a === 'PRIMARY') return { keep: a, drop: b };
+            if (b === 'PRIMARY') return { keep: b, drop: a };
+            if (infoA.nonUnique === 0 && infoB.nonUnique !== 0) return { keep: a, drop: b };
+            if (infoB.nonUnique === 0 && infoA.nonUnique !== 0) return { keep: b, drop: a };
+            return a.length <= b.length ? { keep: a, drop: b } : { keep: b, drop: a };
+          };
+
+          if (sigA === sigB) {
+            // Exact duplicate
+            const { keep, drop } = pickDrop(nameA, infoA, nameB, infoB);
+            findings.push({
+              type: 'duplicate_index',
+              severity: 'high',
+              table: tableKey,
+              index: drop,
+              evidence: {
+                duplicate_index: drop,
+                kept_index: keep,
+                columns: sigA,
+                index_name: drop
+              },
+              impact: {
+                write_overhead: 'ทุก INSERT/UPDATE/DELETE ต้อง maintain ทั้ง 2 indexes ที่เหมือนกัน',
+                storage: 'ใช้พื้นที่ disk ซ้ำซ้อน'
+              },
+              recommendation: `ลบ duplicate index: DROP INDEX ${drop} ON ${tableKey};`
+            });
+          } else if (sigB.startsWith(sigA + ',')) {
+            // sigA is prefix-redundant (sigB covers sigA)
+            if (nameA !== 'PRIMARY') {
+              findings.push({
+                type: 'redundant_index',
+                severity: 'medium',
+                table: tableKey,
+                index: nameA,
+                evidence: {
+                  redundant_index: nameA,
+                  redundant_columns: sigA,
+                  covered_by_index: nameB,
+                  covered_by_columns: sigB,
+                  index_name: nameA
+                },
+                impact: {
+                  write_overhead: `${nameA} (${sigA}) ถูกครอบคลุมโดย ${nameB} (${sigB})`,
+                  storage: 'สามารถลบ index ที่สั้นกว่าได้'
+                },
+                recommendation: `ลบ redundant index: DROP INDEX ${nameA} ON ${tableKey};`
+              });
+            }
+          } else if (sigA.startsWith(sigB + ',')) {
+            // sigB is prefix-redundant (sigA covers sigB)
+            if (nameB !== 'PRIMARY') {
+              findings.push({
+                type: 'redundant_index',
+                severity: 'medium',
+                table: tableKey,
+                index: nameB,
+                evidence: {
+                  redundant_index: nameB,
+                  redundant_columns: sigB,
+                  covered_by_index: nameA,
+                  covered_by_columns: sigA,
+                  index_name: nameB
+                },
+                impact: {
+                  write_overhead: `${nameB} (${sigB}) ถูกครอบคลุมโดย ${nameA} (${sigA})`,
+                  storage: 'สามารถลบ index ที่สั้นกว่าได้'
+                },
+                recommendation: `ลบ redundant index: DROP INDEX ${nameB} ON ${tableKey};`
+              });
+            }
+          }
+        }
+      }
+    }
+
+    return findings;
+  }
+
+  /**
+   * วิเคราะห์ indexes ที่มี cardinality ต่ำมาก (selectivity < 1%)
+   */
+  private analyzeLowCardinalityIndexes(): any[] {
+    if (this.indexCardinality.length === 0) return [];
+
+    const findings: any[] = [];
+
+    for (const idx of this.indexCardinality) {
+      const tableRows = parseInt(idx.TABLE_ROWS) || 0;
+      const cardinality = parseInt(idx.CARDINALITY) || 0;
+      const selectivityPct = parseFloat(idx.selectivity_pct) || 0;
+
+      if (tableRows > 1000 && selectivityPct < 1 && cardinality < 10 && idx.INDEX_NAME !== 'PRIMARY') {
+        findings.push({
+          type: 'low_cardinality_index',
+          severity: tableRows > 100000 ? 'medium' : 'low',
+          table: `${idx.TABLE_SCHEMA}.${idx.TABLE_NAME}`,
+          index: idx.INDEX_NAME,
+          evidence: {
+            index_name: idx.INDEX_NAME,
+            column_name: idx.COLUMN_NAME,
+            cardinality,
+            table_rows: tableRows,
+            selectivity_pct: selectivityPct.toFixed(4) + '%'
+          },
+          impact: {
+            performance: `Index มีเพียง ${cardinality} ค่าที่แตกต่าง จาก ${tableRows.toLocaleString()} rows — MySQL อาจเลือก full table scan แทน`,
+            storage: 'ใช้พื้นที่ disk สำหรับ index ที่มี selectivity ต่ำ'
+          },
+          recommendation: `ตรวจสอบ index ${idx.INDEX_NAME} บน ${idx.COLUMN_NAME} — cardinality ${cardinality} ต่ำมากเมื่อเทียบกับ ${tableRows.toLocaleString()} rows`
+        });
+      }
+    }
+
+    return findings;
+  }
+
+  /**
+   * วิเคราะห์ foreign keys ที่ไม่มี index (ทำให้ JOIN/DELETE ช้า)
+   */
+  private analyzeUnindexedForeignKeys(): any[] {
+    if (this.foreignKeys.length === 0 || this.indexes.length === 0) return [];
+
+    const findings: any[] = [];
+
+    // Build set of leading indexed columns per table
+    const indexedLeadingCols = new Map<string, Set<string>>();
+    for (const idx of this.indexes) {
+      if (parseInt(idx.SEQ_IN_INDEX) === 1) {
+        const tableKey = `${idx.TABLE_SCHEMA}.${idx.TABLE_NAME}`;
+        if (!indexedLeadingCols.has(tableKey)) {
+          indexedLeadingCols.set(tableKey, new Set());
+        }
+        indexedLeadingCols.get(tableKey)!.add(idx.COLUMN_NAME);
+      }
+    }
+
+    // Check each FK
+    for (const fk of this.foreignKeys) {
+      const tableKey = `${fk.TABLE_SCHEMA}.${fk.TABLE_NAME}`;
+      const colName = fk.COLUMN_NAME;
+
+      const leadingCols = indexedLeadingCols.get(tableKey);
+      if (!leadingCols || !leadingCols.has(colName)) {
+        findings.push({
+          type: 'unindexed_foreign_key',
+          severity: 'high',
+          table: tableKey,
+          evidence: {
+            constraint_name: fk.CONSTRAINT_NAME,
+            column_name: colName,
+            referenced_table: `${fk.REFERENCED_TABLE_SCHEMA}.${fk.REFERENCED_TABLE_NAME}`,
+            referenced_column: fk.REFERENCED_COLUMN_NAME
+          },
+          impact: {
+            join_performance: `JOIN กับ ${fk.REFERENCED_TABLE_NAME} จะต้อง full scan บน ${colName}`,
+            delete_cascade: `DELETE CASCADE จาก ${fk.REFERENCED_TABLE_NAME} จะช้ามาก`
+          },
+          recommendation: `สร้าง index: CREATE INDEX idx_${fk.TABLE_NAME}_${colName} ON ${tableKey}(${colName});`
+        });
+      }
+    }
+
+    return findings;
+  }
+
+  /**
+   * วิเคราะห์ lock contention จาก performance_schema
+   */
+  private analyzeLockContention(): any[] {
+    const tableWaits = this.lockStats?.tableWaits;
+    if (!tableWaits || !Array.isArray(tableWaits)) return [];
+
+    const findings: any[] = [];
+
+    for (const wait of tableWaits) {
+      const totalWaitSec = parseFloat(wait.total_wait_sec) || 0;
+      const avgWaitSec = parseFloat(wait.avg_wait_sec) || 0;
+
+      if (totalWaitSec > 1 || avgWaitSec > 0.01) {
+        const severity = totalWaitSec > 10 ? 'high' : totalWaitSec > 1 ? 'medium' : 'low';
+
+        findings.push({
+          type: 'lock_contention',
+          severity,
+          table: `${wait.OBJECT_SCHEMA}.${wait.OBJECT_NAME}`,
+          evidence: {
+            total_wait_sec: totalWaitSec.toFixed(4),
+            avg_wait_sec: avgWaitSec.toFixed(6),
+            count_star: wait.COUNT_STAR,
+            object_name: wait.OBJECT_NAME
+          },
+          impact: {
+            concurrency: `รวม ${totalWaitSec.toFixed(2)} วินาทีที่ถูก block เนื่องจาก lock contention`,
+            throughput: avgWaitSec > 0.01 ? 'ส่งผลกระทบต่อ throughput ของ concurrent operations' : 'มีผลกระทบเล็กน้อย'
+          },
+          recommendation: `ตรวจสอบ lock contention บน ${wait.OBJECT_NAME} — พิจารณาปรับ transaction scope หรือ isolation level`
         });
       }
     }

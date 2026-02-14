@@ -216,6 +216,9 @@ export class ScanPoller {
       indexCardinality,
       slowQueries,
       missingIndexes,
+      indexes,
+      foreignKeys,
+      lockStats,
     });
     const findings = queryAnalyzer.analyze();
     this.logger.info(`Found ${findings.length} potential optimization opportunities`);

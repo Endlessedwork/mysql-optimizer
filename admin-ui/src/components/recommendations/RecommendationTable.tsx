@@ -56,7 +56,12 @@ const getTypeName = (type: string): string => {
     'slow_query': 'Slow Query',
     'inefficient_query': 'Inefficient Query',
     'missing_index': 'Missing Index',
-    'large_table': 'Large Table'
+    'large_table': 'Large Table',
+    'duplicate_index': 'Duplicate Index',
+    'redundant_index': 'Redundant Index',
+    'low_cardinality_index': 'Low Cardinality Index',
+    'unindexed_foreign_key': 'Unindexed Foreign Key',
+    'lock_contention': 'Lock Contention'
   };
   return names[type] || type.replace(/_/g, ' ');
 };

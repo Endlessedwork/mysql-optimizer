@@ -189,7 +189,12 @@ export class RecommendationPackGenerator {
       'slow_query': '🐢 Slow Queries',
       'inefficient_query': '📉 Inefficient Queries',
       'missing_index': '❌ Missing Indexes',
-      'large_table': '📦 Large Tables'
+      'large_table': '📦 Large Tables',
+      'duplicate_index': '🔁 Duplicate Indexes',
+      'redundant_index': '📎 Redundant Indexes',
+      'low_cardinality_index': '📉 Low Cardinality Indexes',
+      'unindexed_foreign_key': '🔗 Unindexed Foreign Keys',
+      'lock_contention': '🔒 Lock Contention'
     };
     return names[type] || `📋 ${type}`;
   }
@@ -202,7 +207,12 @@ export class RecommendationPackGenerator {
       'table_fragmentation': `พบ ${recs.length} tables ที่มี fragmentation สูง ควรรัน OPTIMIZE TABLE`,
       'unused_index': `พบ ${recs.length} indexes ที่ไม่ถูกใช้งาน พิจารณาลบเพื่อลด overhead`,
       'slow_query': `พบ ${recs.length} slow queries ที่ใช้เวลานานกว่า 1 วินาที`,
-      'missing_index': `พบ ${recs.length} queries ที่ไม่ใช้ index เลย`
+      'missing_index': `พบ ${recs.length} queries ที่ไม่ใช้ index เลย`,
+      'duplicate_index': `พบ ${recs.length} indexes ที่ซ้ำกันทั้งหมด ควรลบเพื่อลด write overhead`,
+      'redundant_index': `พบ ${recs.length} indexes ที่ถูกครอบคลุมโดย index อื่น สามารถลบได้`,
+      'low_cardinality_index': `พบ ${recs.length} indexes ที่มี selectivity ต่ำมาก ควรตรวจสอบ`,
+      'unindexed_foreign_key': `พบ ${recs.length} foreign keys ที่ไม่มี index ทำให้ JOIN/DELETE ช้า`,
+      'lock_contention': `พบ ${recs.length} tables ที่มี lock contention สูง ควรตรวจสอบ transaction patterns`
     };
     return summaries[type] || `พบ ${recs.length} รายการในหมวดนี้`;
   }
@@ -232,9 +242,11 @@ export class RecommendationPackGenerator {
   private estimateImplementationTime(rec: any): string {
     // Rough estimation based on operation type
     const type = rec.problem_statement;
-    if (type === 'unused_index') return '< 1 นาที';
-    if (type === 'full_table_scan' || type === 'missing_index') return '1-5 นาที (ขึ้นกับขนาดตาราง)';
+    if (type === 'unused_index' || type === 'duplicate_index' || type === 'redundant_index') return '< 1 นาที';
+    if (type === 'full_table_scan' || type === 'missing_index' || type === 'unindexed_foreign_key') return '1-5 นาที (ขึ้นกับขนาดตาราง)';
     if (type === 'table_fragmentation') return '5-30 นาที (ขึ้นกับขนาดตาราง)';
+    if (type === 'low_cardinality_index') return '5-15 นาที (ต้องวิเคราะห์ data distribution)';
+    if (type === 'lock_contention') return '10-30 นาที (ต้องวิเคราะห์ transaction patterns)';
     return '1-10 นาที';
   }
 
@@ -473,13 +485,97 @@ export class RecommendationPackGenerator {
 
       case 'slow_query':
       case 'missing_index':
-        // For slow queries, we need analysis first - keep as non-multistep for now
-        // but provide structured guidance
+        const missingIndexCols = columns.length > 0 ? columns : this.extractWhereColumns(query);
+        if (missingIndexCols.length > 0) {
+          const missingIndexName = `idx_${tableName}_${missingIndexCols[0]}`.substring(0, 64);
+          const missingCreateSql = `CREATE INDEX ${missingIndexName} ON ${tableName}(${missingIndexCols.join(', ')});`;
+          const missingDropSql = `DROP INDEX ${missingIndexName} ON ${tableName};`;
+
+          options.push(this.createMultiStepFixOption({
+            id: 'add_index',
+            description: `สร้าง index บน ${tableName}(${missingIndexCols.join(', ')}) เพื่อเพิ่มประสิทธิภาพ`,
+            implementation: missingCreateSql,
+            rollback: missingDropSql,
+            estimated_impact: evidence.avg_time_sec
+              ? `ลดเวลาจาก ${evidence.avg_time_sec} seconds`
+              : 'ลด query time อย่างมาก',
+            templateKey: 'add_index',
+            query,
+            tableName,
+            fixSql: missingCreateSql,
+            rollbackSql: missingDropSql
+          }));
+        } else {
+          // ไม่สามารถ extract columns ได้ — ให้เป็น single-step วิเคราะห์
+          options.push({
+            id: 'analyze_slow_query',
+            description: 'วิเคราะห์ query และเพิ่ม index ที่เหมาะสม',
+            implementation: `SHOW INDEX FROM ${tableName};`,
+            estimated_impact: evidence.avg_time_sec
+              ? `ลดเวลาจาก ${evidence.avg_time_sec} seconds`
+              : 'ปรับปรุงประสิทธิภาพ query',
+            is_multistep: false
+          });
+        }
+        break;
+
+      case 'duplicate_index':
+      case 'redundant_index': {
+        const dupIndexName = finding.index || evidence.duplicate_index || evidence.redundant_index || 'index_name';
+        const dropDupSql = `DROP INDEX ${dupIndexName} ON ${tableName};`;
+        options.push(this.createMultiStepFixOption({
+          id: 'drop_unused_index',
+          description: finding.type === 'duplicate_index'
+            ? `ลบ duplicate index ${dupIndexName} (เหมือนกับ ${evidence.kept_index || 'another index'})`
+            : `ลบ redundant index ${dupIndexName} (ถูกครอบคลุมโดย ${evidence.covered_by_index || 'a wider index'})`,
+          implementation: dropDupSql,
+          rollback: `-- บันทึก index definition ก่อนลบ\nSHOW CREATE TABLE ${tableName};`,
+          estimated_impact: `ลด write overhead จากการ maintain ${dupIndexName}`,
+          templateKey: 'drop_unused_index',
+          query: '',
+          tableName,
+          fixSql: dropDupSql,
+          rollbackSql: ''
+        }));
+        break;
+      }
+
+      case 'low_cardinality_index':
         options.push({
-          id: 'analyze_slow_query',
-          description: 'วิเคราะห์ slow query และเพิ่ม index ที่เหมาะสม',
-          implementation: `-- Step 1: ดู execution plan\nEXPLAIN FORMAT=JSON ${query || 'SELECT ...'}\n\n-- Step 2: ตรวจสอบ indexes ที่มี\nSHOW INDEX FROM ${tableName};\n\n-- Step 3: สร้าง index ตาม WHERE/JOIN columns`,
-          estimated_impact: `ลดเวลาจาก ${evidence.avg_time_sec || 'N/A'} seconds`,
+          id: 'review_low_cardinality',
+          description: `ตรวจสอบ index ${finding.index || 'index_name'} ที่มี cardinality ต่ำมาก`,
+          implementation: `-- ตรวจสอบ index selectivity\nSHOW INDEX FROM ${tableName};\n\n-- ดู data distribution\nSELECT ${evidence.column_name || 'column'}, COUNT(*) as cnt FROM ${tableName} GROUP BY ${evidence.column_name || 'column'} ORDER BY cnt DESC LIMIT 20;`,
+          estimated_impact: `Index มี cardinality เพียง ${evidence.cardinality || 'N/A'} จาก ${evidence.table_rows?.toLocaleString() || 'N/A'} rows`,
+          is_multistep: false
+        });
+        break;
+
+      case 'unindexed_foreign_key': {
+        const fkCol = evidence.column_name || 'column_name';
+        const fkIndexName = `idx_${tableName.split('.').pop()}_${fkCol}`.substring(0, 64);
+        const fkCreateSql = `CREATE INDEX ${fkIndexName} ON ${tableName}(${fkCol});`;
+        const fkDropSql = `DROP INDEX ${fkIndexName} ON ${tableName};`;
+        options.push(this.createMultiStepFixOption({
+          id: 'add_index',
+          description: `สร้าง index บน FK column ${fkCol} เพื่อเพิ่มประสิทธิภาพ JOIN/DELETE CASCADE`,
+          implementation: fkCreateSql,
+          rollback: fkDropSql,
+          estimated_impact: `ปรับปรุง JOIN performance กับ ${evidence.referenced_table || 'referenced table'}`,
+          templateKey: 'add_index',
+          query: '',
+          tableName,
+          fixSql: fkCreateSql,
+          rollbackSql: fkDropSql
+        }));
+        break;
+      }
+
+      case 'lock_contention':
+        options.push({
+          id: 'investigate_locks',
+          description: `ตรวจสอบ lock contention บน ${tableName}`,
+          implementation: `-- ดู current lock waits\nSELECT * FROM performance_schema.table_lock_waits_summary_by_table WHERE OBJECT_NAME = '${tableName.split('.').pop()}';\n\n-- ดู active transactions\nSELECT * FROM information_schema.INNODB_TRX;`,
+          estimated_impact: `ลด lock wait time ${evidence.total_wait_sec || 'N/A'} วินาที`,
           is_multistep: false
         });
         break;
@@ -688,9 +784,13 @@ export class RecommendationPackGenerator {
   private calculateTradeOffs(finding: any): any {
     const isHighSeverity = finding.severity === 'critical' || finding.severity === 'high';
     
+    const dropTypes = ['unused_index', 'duplicate_index', 'redundant_index'];
+    const isDropType = dropTypes.includes(finding.type);
+    const isInvestigateType = finding.type === 'low_cardinality_index' || finding.type === 'lock_contention';
+
     return {
-      write_cost: finding.type === 'unused_index' ? 'ลดลง' : 'เพิ่มขึ้นเล็กน้อย',
-      disk_usage: finding.type === 'unused_index' ? 'ลดลง' : 'เพิ่มขึ้นเล็กน้อย',
+      write_cost: isDropType ? 'ลดลง' : isInvestigateType ? 'ไม่เปลี่ยนแปลง' : 'เพิ่มขึ้นเล็กน้อย',
+      disk_usage: isDropType ? 'ลดลง' : isInvestigateType ? 'ไม่เปลี่ยนแปลง' : 'เพิ่มขึ้นเล็กน้อย',
       lock_risk: isHighSeverity ? 'สูง' : 'ต่ำ',
       downtime: finding.type === 'table_fragmentation' ? 'อาจมีขณะ optimize' : 'ไม่มี',
       maintenance: 'ต้อง monitor หลังการเปลี่ยนแปลง'
@@ -705,9 +805,17 @@ export class RecommendationPackGenerator {
       case 'missing_index':
         return 'DROP INDEX ที่เพิ่งสร้าง หากประสิทธิภาพไม่ดีขึ้น';
       case 'unused_index':
+      case 'duplicate_index':
+      case 'redundant_index':
         return 'สร้าง index กลับคืน โดยดูจาก SHOW CREATE TABLE ก่อนลบ';
       case 'table_fragmentation':
         return 'ไม่จำเป็นต้อง rollback (OPTIMIZE TABLE ไม่มีผลเสีย)';
+      case 'unindexed_foreign_key':
+        return 'DROP INDEX ที่เพิ่งสร้าง หากประสิทธิภาพไม่ดีขึ้น';
+      case 'low_cardinality_index':
+        return 'ไม่มี rollback (เป็นการตรวจสอบ ไม่ใช่การเปลี่ยนแปลง)';
+      case 'lock_contention':
+        return 'ไม่มี rollback (เป็นการวิเคราะห์ ไม่ใช่การเปลี่ยนแปลง)';
       default:
         return 'Revert การเปลี่ยนแปลงโดยดูจาก DDL ที่บันทึกไว้';
     }
