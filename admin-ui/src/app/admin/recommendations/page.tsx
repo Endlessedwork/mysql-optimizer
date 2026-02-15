@@ -11,7 +11,7 @@ import { useRouter } from 'next/navigation';
 import { Lightbulb, RefreshCw, X, Database, AlertTriangle, AlertCircle, Info, CheckCircle2, Table2, FileCode2, Archive } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 
-type StatusFilter = 'all' | 'pending' | 'processing' | 'completed' | 'completed_with_errors' | 'rejected';
+type StatusFilter = 'all' | 'pending' | 'partially_applied' | 'completed' | 'completed_with_errors' | 'rejected';
 
 export default function RecommendationsPage() {
   const router = useRouter();
@@ -103,7 +103,7 @@ export default function RecommendationsPage() {
   const filters: { key: StatusFilter; label: string }[] = [
     { key: 'all', label: 'All' },
     { key: 'pending', label: 'Pending' },
-    { key: 'processing', label: 'Processing' },
+    { key: 'partially_applied', label: 'Partially Applied' },
     { key: 'completed', label: 'Completed' },
     { key: 'completed_with_errors', label: 'Completed with Errors' },
     { key: 'rejected', label: 'Rejected' },

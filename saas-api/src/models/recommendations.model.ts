@@ -4,7 +4,7 @@ export interface Recommendation {
   id: string;
   connectionId: string;
   connectionName?: string;
-  status: 'pending' | 'processing' | 'completed' | 'completed_with_errors' | 'rejected';
+  status: 'pending' | 'processing' | 'partially_applied' | 'completed' | 'completed_with_errors' | 'rejected';
   createdAt: string;
   updatedAt: string;
   totalFixes?: number;
@@ -183,7 +183,7 @@ export const updatePackStatus = async (id: string): Promise<Recommendation | nul
   if (totalProcessed === 0) {
     newStatus = 'pending';
   } else if (totalProcessed < (totalFixes || 0)) {
-    newStatus = 'processing';
+    newStatus = 'partially_applied';
   } else if ((failedFixes || 0) > 0) {
     newStatus = 'completed_with_errors';
   } else {
