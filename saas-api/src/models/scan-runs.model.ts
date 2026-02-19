@@ -369,6 +369,37 @@ export const createQueryDigests = async (
   return result.rowCount || digests.length;
 };
 
+/** Get latest query digests for a connection (from most recent completed scan) */
+export const getLatestQueryDigestsByConnectionId = async (
+  connectionId: string
+): Promise<{ digests: QueryDigest[]; scanRunCreatedAt: string } | null> => {
+  // Find latest completed scan run for this connection
+  const scanResult = await Database.query<any>(
+    `SELECT id, created_at as "createdAt"
+    FROM scan_runs
+    WHERE connection_profile_id = $1 AND status = 'completed'
+    ORDER BY completed_at DESC NULLS LAST
+    LIMIT 1`,
+    [connectionId]
+  );
+
+  if (scanResult.rows.length === 0) {
+    return null;
+  }
+
+  const scanRun = scanResult.rows[0];
+  const digests = await getQueryDigestsByScanRunId(scanRun.id);
+
+  if (digests.length === 0) {
+    return null;
+  }
+
+  return {
+    digests,
+    scanRunCreatedAt: scanRun.createdAt?.toISOString() || scanRun.createdAt
+  };
+};
+
 export const getQueryDigestsByScanRunId = async (scanRunId: string): Promise<QueryDigest[]> => {
   const result = await Database.query<any>(
     `SELECT id, scan_run_id as "scanRunId", digest, digest_text as "digestText",

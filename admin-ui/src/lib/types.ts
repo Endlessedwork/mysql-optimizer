@@ -426,6 +426,29 @@ export type TableView = {
   stats?: SchemaTableStat
 }
 
+// Query Performance types
+export type QueryDigest = {
+  id: string
+  scanRunId: string
+  digest: string
+  digestText: string
+  countStar: number
+  sumTimerWait: number
+  avgTimerWait: number
+  minTimerWait: number
+  maxTimerWait: number
+  sumRowsExamined: number
+  avgRowsExamined: number
+  sumRowsSent: number
+  avgRowsSent: number
+  createdAt: string
+}
+
+export type QueryPerformanceData = {
+  digests: QueryDigest[]
+  scanRunCreatedAt: string
+}
+
 // Audit Log types
 export type AuditLog = {
   id: string

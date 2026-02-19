@@ -21,6 +21,7 @@ import {
   XCircle,
   ArrowRight,
   Database,
+  Activity,
 } from 'lucide-react';
 
 interface ConnectionActionsProps {
@@ -142,6 +143,18 @@ export const ConnectionActions = ({
         title="View Schema"
       >
         <Database className="w-4 h-4" />
+      </button>
+
+      {/* Query Performance */}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          router.push(`/admin/connections/${connection.id}/query-performance`);
+        }}
+        className={`${iconBtnClass} text-slate-500 hover:text-blue-600 hover:bg-blue-50`}
+        title="Query Performance"
+      >
+        <Activity className="w-4 h-4" />
       </button>
 
       {/* Run Scan */}

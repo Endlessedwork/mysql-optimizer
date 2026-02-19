@@ -12,7 +12,7 @@ import {
   CreateConnectionInput,
   UpdateConnectionInput
 } from '../models/connections.model';
-import { createScanRun, getLatestSchemaByConnectionId, getSchemaSnapshotsByConnectionId } from '../models/scan-runs.model';
+import { createScanRun, getLatestSchemaByConnectionId, getSchemaSnapshotsByConnectionId, getLatestQueryDigestsByConnectionId } from '../models/scan-runs.model';
 import { computeSchemaDiff } from '../utils/schema-diff';
 import mysql from 'mysql2/promise';
 
@@ -779,6 +779,37 @@ export default async function connectionsRoutes(fastify: FastifyInstance) {
     } catch (error) {
       fastify.log.error(error);
       return reply.status(500).send({ success: false, error: 'Failed to compute schema diff' });
+    }
+  });
+
+  // GET /api/connections/:id/query-performance - Get latest query digests for this connection
+  fastify.get('/api/connections/:id/query-performance', {
+    preHandler: [authenticate],
+    schema: {
+      params: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id']
+      }
+    }
+  }, async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+
+      const connection = await getConnectionById(id);
+      if (!connection) {
+        return reply.status(404).send({ success: false, error: 'Connection not found' });
+      }
+
+      const result = await getLatestQueryDigestsByConnectionId(id);
+      if (!result) {
+        return reply.status(404).send({ success: false, error: 'No query performance data found. Run a scan first.' });
+      }
+
+      return { success: true, data: result };
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ success: false, error: 'Failed to fetch query performance data' });
     }
   });
 

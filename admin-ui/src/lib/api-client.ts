@@ -11,6 +11,7 @@ import type {
   ScanRun,
   SchemaSnapshot,
   SchemaDiff,
+  QueryPerformanceData,
 } from './types';
 
 // Route through server-side proxy to keep API_SECRET off the client
@@ -492,4 +493,9 @@ export async function getConnectionSchemaHistory(connectionId: string, limit = 1
 
 export async function getConnectionSchemaDiff(connectionId: string, fromId: string, toId: string): Promise<ApiResponse<SchemaDiff>> {
   return apiFetch<SchemaDiff>(`/api/connections/${connectionId}/schema/diff?from=${fromId}&to=${toId}`)
+}
+
+// Query Performance API
+export async function getConnectionQueryPerformance(connectionId: string): Promise<ApiResponse<QueryPerformanceData>> {
+  return apiFetch<QueryPerformanceData>(`/api/connections/${connectionId}/query-performance`)
 }
