@@ -25,6 +25,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
   /**
+   * Public routes that don't require authentication
+   */
+  const PUBLIC_ROUTES = ['/', '/login', '/register', '/forgot-password', '/reset-password'];
+
+  /**
    * Load user from API on mount
    */
   const loadUser = useCallback(async () => {
@@ -34,14 +39,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error: any) {
       if (error.message === 'UNAUTHORIZED') {
         setUser(null);
-        // Redirect to login if not already there
-        if (pathname !== '/login') {
+        // Only redirect to login if on a protected route
+        if (!PUBLIC_ROUTES.includes(pathname)) {
           router.push('/login');
         }
       }
     } finally {
       setIsLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname, router]);
 
   useEffect(() => {
