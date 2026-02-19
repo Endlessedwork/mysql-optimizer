@@ -25,16 +25,17 @@ export function exportToDBML(tables: TableView[], dbName: string): string {
         settings.push(`default: '${def}'`);
       }
       if (col.EXTRA || col.extra) {
-        const extra = col.EXTRA || col.extra;
+        const extra = col.EXTRA || col.extra || '';
         if (extra.includes('auto_increment')) settings.push('increment');
       }
       if (col._isFK && col._fkRef) {
-        const refTable = col._fkRef.REFERENCED_TABLE_NAME || col._fkRef.referenced_table_name;
-        const refCol = col._fkRef.REFERENCED_COLUMN_NAME || col._fkRef.referenced_column_name;
+        const refTable = col._fkRef.REFERENCED_TABLE_NAME || (col._fkRef as any).referenced_table_name;
+        const refCol = col._fkRef.REFERENCED_COLUMN_NAME || (col._fkRef as any).referenced_column_name;
         settings.push(`ref: > ${refTable}.${refCol}`);
       }
       if (col.COLUMN_COMMENT || col.column_comment) {
-        settings.push(`note: '${(col.COLUMN_COMMENT || col.column_comment).replace(/'/g, "\\'")}'`);
+        const comment = col.COLUMN_COMMENT || col.column_comment || '';
+        settings.push(`note: '${comment.replace(/'/g, "\\'")}'`);
       }
 
       const settingsStr = settings.length > 0 ? ` [${settings.join(', ')}]` : '';
@@ -97,11 +98,12 @@ export function exportToSQL(tables: TableView[], dbName: string): string {
         }
       }
       if (col.EXTRA || col.extra) {
-        const extra = (col.EXTRA || col.extra).toUpperCase();
+        const extra = (col.EXTRA || col.extra || '').toUpperCase();
         if (extra) parts.push(extra);
       }
       if (col.COLUMN_COMMENT || col.column_comment) {
-        parts.push(`COMMENT '${(col.COLUMN_COMMENT || col.column_comment).replace(/'/g, "\\'")}'`);
+        const comment = col.COLUMN_COMMENT || col.column_comment || '';
+        parts.push(`COMMENT '${comment.replace(/'/g, "\\'")}'`);
       }
 
       colDefs.push(parts.join(' '));
