@@ -20,6 +20,7 @@ import {
   CheckCircle,
   XCircle,
   ArrowRight,
+  Database,
 } from 'lucide-react';
 
 interface ConnectionActionsProps {
@@ -129,6 +130,18 @@ export const ConnectionActions = ({
         title="Edit"
       >
         <Pencil className="w-4 h-4" />
+      </button>
+
+      {/* View Schema */}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          router.push(`/admin/connections/${connection.id}/schema`);
+        }}
+        className={`${iconBtnClass} text-slate-500 hover:text-violet-600 hover:bg-violet-50`}
+        title="View Schema"
+      >
+        <Database className="w-4 h-4" />
       </button>
 
       {/* Run Scan */}

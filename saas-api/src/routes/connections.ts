@@ -12,7 +12,8 @@ import {
   CreateConnectionInput,
   UpdateConnectionInput
 } from '../models/connections.model';
-import { createScanRun } from '../models/scan-runs.model';
+import { createScanRun, getLatestSchemaByConnectionId, getSchemaSnapshotsByConnectionId } from '../models/scan-runs.model';
+import { computeSchemaDiff } from '../utils/schema-diff';
 import mysql from 'mysql2/promise';
 
 export default async function connectionsRoutes(fastify: FastifyInstance) {
@@ -677,6 +678,107 @@ export default async function connectionsRoutes(fastify: FastifyInstance) {
         success: false,
         error: 'Failed to test connection'
       });
+    }
+  });
+
+  // GET /api/connections/:id/schema - Get latest schema snapshot for this connection
+  fastify.get('/api/connections/:id/schema', {
+    preHandler: [authenticate],
+    schema: {
+      params: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id']
+      }
+    }
+  }, async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+
+      const connection = await getConnectionById(id);
+      if (!connection) {
+        return reply.status(404).send({ success: false, error: 'Connection not found' });
+      }
+
+      const snapshot = await getLatestSchemaByConnectionId(id);
+      if (!snapshot) {
+        return reply.status(404).send({ success: false, error: 'No schema snapshot found. Run a scan first.' });
+      }
+
+      return { success: true, data: snapshot };
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ success: false, error: 'Failed to fetch schema' });
+    }
+  });
+
+  // GET /api/connections/:id/schema/history - Get schema snapshot history for diff
+  fastify.get('/api/connections/:id/schema/history', {
+    preHandler: [authenticate],
+    schema: {
+      params: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id']
+      },
+      querystring: {
+        type: 'object',
+        properties: {
+          limit: { type: 'integer', minimum: 1, maximum: 20, default: 10 }
+        }
+      }
+    }
+  }, async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const { limit = 10 } = request.query as { limit?: number };
+
+      const snapshots = await getSchemaSnapshotsByConnectionId(id, limit);
+
+      return { success: true, data: snapshots };
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ success: false, error: 'Failed to fetch schema history' });
+    }
+  });
+
+  // GET /api/connections/:id/schema/diff - Compare two schema snapshots
+  fastify.get('/api/connections/:id/schema/diff', {
+    preHandler: [authenticate],
+    schema: {
+      params: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id']
+      },
+      querystring: {
+        type: 'object',
+        properties: {
+          from: { type: 'string', description: 'Older snapshot ID' },
+          to: { type: 'string', description: 'Newer snapshot ID' }
+        },
+        required: ['from', 'to']
+      }
+    }
+  }, async (request, reply) => {
+    try {
+      const { from: fromId, to: toId } = request.query as { from: string; to: string };
+
+      const { id } = request.params as { id: string };
+      const snapshots = await getSchemaSnapshotsByConnectionId(id, 20);
+      const fromSnapshot = snapshots.find(s => s.id === fromId);
+      const toSnapshot = snapshots.find(s => s.id === toId);
+
+      if (!fromSnapshot || !toSnapshot) {
+        return reply.status(404).send({ success: false, error: 'Snapshot not found' });
+      }
+
+      const diff = computeSchemaDiff(fromSnapshot, toSnapshot);
+
+      return { success: true, data: diff };
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ success: false, error: 'Failed to compute schema diff' });
     }
   });
 

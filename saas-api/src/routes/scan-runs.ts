@@ -203,7 +203,12 @@ export default async function scanRunsRoutes(fastify: FastifyInstance) {
           procedures: { type: 'array' },
           functions: { type: 'array' },
           triggers: { type: 'array' },
-          events: { type: 'array' }
+          events: { type: 'array' },
+          foreignKeys: { type: 'array' },
+          tableStats: { type: 'array' },
+          indexUsage: { type: 'array' },
+          indexCardinality: { type: 'array' },
+          lockStats: { type: ['array', 'object'] }
         }
       }
     }
@@ -219,6 +224,11 @@ export default async function scanRunsRoutes(fastify: FastifyInstance) {
         functions?: any[];
         triggers?: any[];
         events?: any[];
+        foreignKeys?: any[];
+        tableStats?: any[];
+        indexUsage?: any[];
+        indexCardinality?: any[];
+        lockStats?: any[];
       };
       
       // Check if scan run exists

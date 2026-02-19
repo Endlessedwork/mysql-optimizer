@@ -32,6 +32,11 @@ export interface SchemaSnapshot {
   functions: any;
   triggers: any;
   events: any;
+  foreignKeys: any;
+  tableStats: any;
+  indexUsage: any;
+  indexCardinality: any;
+  lockStats: any;
   createdAt: string;
 }
 
@@ -202,12 +207,19 @@ export const createSchemaSnapshot = async (
     functions?: any;
     triggers?: any;
     events?: any;
+    foreignKeys?: any;
+    tableStats?: any;
+    indexUsage?: any;
+    indexCardinality?: any;
+    lockStats?: any;
   }
 ): Promise<SchemaSnapshot> => {
   const result = await Database.query<any>(
-    `INSERT INTO schema_snapshots (scan_run_id, tables, columns, indexes, views, procedures, functions, triggers, events)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-    RETURNING id, scan_run_id as "scanRunId", tables, columns, indexes, views, procedures, functions, triggers, events, created_at as "createdAt"`,
+    `INSERT INTO schema_snapshots (scan_run_id, tables, columns, indexes, views, procedures, functions, triggers, events, foreign_keys, table_stats, index_usage, index_cardinality, lock_stats)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+    RETURNING id, scan_run_id as "scanRunId", tables, columns, indexes, views, procedures, functions, triggers, events,
+      foreign_keys as "foreignKeys", table_stats as "tableStats", index_usage as "indexUsage",
+      index_cardinality as "indexCardinality", lock_stats as "lockStats", created_at as "createdAt"`,
     [
       scanRunId,
       JSON.stringify(data.tables || []),
@@ -217,11 +229,25 @@ export const createSchemaSnapshot = async (
       JSON.stringify(data.procedures || []),
       JSON.stringify(data.functions || []),
       JSON.stringify(data.triggers || []),
-      JSON.stringify(data.events || [])
+      JSON.stringify(data.events || []),
+      JSON.stringify(data.foreignKeys || []),
+      JSON.stringify(data.tableStats || []),
+      JSON.stringify(data.indexUsage || []),
+      JSON.stringify(data.indexCardinality || []),
+      JSON.stringify(data.lockStats || [])
     ]
   );
-  
-  const row = result.rows[0];
+
+  return mapSchemaSnapshotRow(result.rows[0]);
+};
+
+const SCHEMA_SNAPSHOT_COLUMNS = `
+  id, scan_run_id as "scanRunId", tables, columns, indexes, views, procedures, functions, triggers, events,
+  foreign_keys as "foreignKeys", table_stats as "tableStats", index_usage as "indexUsage",
+  index_cardinality as "indexCardinality", lock_stats as "lockStats", created_at as "createdAt"
+`;
+
+function mapSchemaSnapshotRow(row: any): SchemaSnapshot {
   return {
     id: row.id,
     scanRunId: row.scanRunId,
@@ -233,35 +259,74 @@ export const createSchemaSnapshot = async (
     functions: row.functions,
     triggers: row.triggers,
     events: row.events,
+    foreignKeys: row.foreignKeys || [],
+    tableStats: row.tableStats || [],
+    indexUsage: row.indexUsage || [],
+    indexCardinality: row.indexCardinality || [],
+    lockStats: row.lockStats || [],
     createdAt: row.createdAt?.toISOString() || row.createdAt
   };
-};
+}
 
 export const getSchemaSnapshotByScanRunId = async (scanRunId: string): Promise<SchemaSnapshot | null> => {
   const result = await Database.query<any>(
-    `SELECT id, scan_run_id as "scanRunId", tables, columns, indexes, views, procedures, functions, triggers, events, created_at as "createdAt"
-    FROM schema_snapshots WHERE scan_run_id = $1`,
+    `SELECT ${SCHEMA_SNAPSHOT_COLUMNS} FROM schema_snapshots WHERE scan_run_id = $1`,
     [scanRunId]
   );
-  
+
   if (result.rows.length === 0) {
     return null;
   }
-  
+
+  return mapSchemaSnapshotRow(result.rows[0]);
+};
+
+const SCHEMA_SNAPSHOT_JOIN_COLUMNS = `
+  ss.id, ss.scan_run_id as "scanRunId", ss.tables, ss.columns, ss.indexes, ss.views,
+  ss.procedures, ss.functions, ss.triggers, ss.events,
+  ss.foreign_keys as "foreignKeys", ss.table_stats as "tableStats", ss.index_usage as "indexUsage",
+  ss.index_cardinality as "indexCardinality", ss.lock_stats as "lockStats", ss.created_at as "createdAt"
+`;
+
+/** Get latest completed schema snapshot for a connection */
+export const getLatestSchemaByConnectionId = async (connectionId: string): Promise<(SchemaSnapshot & { scanRunCreatedAt: string }) | null> => {
+  const result = await Database.query<any>(
+    `SELECT ${SCHEMA_SNAPSHOT_JOIN_COLUMNS}, sr.created_at as "scanRunCreatedAt"
+    FROM schema_snapshots ss
+    JOIN scan_runs sr ON sr.id = ss.scan_run_id
+    WHERE sr.connection_profile_id = $1 AND sr.status = 'completed'
+    ORDER BY sr.completed_at DESC NULLS LAST
+    LIMIT 1`,
+    [connectionId]
+  );
+
+  if (result.rows.length === 0) {
+    return null;
+  }
+
   const row = result.rows[0];
   return {
-    id: row.id,
-    scanRunId: row.scanRunId,
-    tables: row.tables,
-    columns: row.columns,
-    indexes: row.indexes,
-    views: row.views,
-    procedures: row.procedures,
-    functions: row.functions,
-    triggers: row.triggers,
-    events: row.events,
-    createdAt: row.createdAt?.toISOString() || row.createdAt
+    ...mapSchemaSnapshotRow(row),
+    scanRunCreatedAt: row.scanRunCreatedAt?.toISOString() || row.scanRunCreatedAt
   };
+};
+
+/** Get all schema snapshots for a connection (for diff history) */
+export const getSchemaSnapshotsByConnectionId = async (connectionId: string, limit = 10): Promise<Array<SchemaSnapshot & { scanRunCreatedAt: string }>> => {
+  const result = await Database.query<any>(
+    `SELECT ${SCHEMA_SNAPSHOT_JOIN_COLUMNS}, sr.created_at as "scanRunCreatedAt"
+    FROM schema_snapshots ss
+    JOIN scan_runs sr ON sr.id = ss.scan_run_id
+    WHERE sr.connection_profile_id = $1 AND sr.status = 'completed'
+    ORDER BY sr.completed_at DESC NULLS LAST
+    LIMIT $2`,
+    [connectionId, limit]
+  );
+
+  return result.rows.map((row: any) => ({
+    ...mapSchemaSnapshotRow(row),
+    scanRunCreatedAt: row.scanRunCreatedAt?.toISOString() || row.scanRunCreatedAt
+  }));
 };
 
 export const createQueryDigests = async (

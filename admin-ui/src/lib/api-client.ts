@@ -9,6 +9,8 @@ import type {
   AuditLog,
   AuditLogFilters,
   ScanRun,
+  SchemaSnapshot,
+  SchemaDiff,
 } from './types';
 
 // Route through server-side proxy to keep API_SECRET off the client
@@ -49,6 +51,8 @@ async function apiFetch<T>(
         errorMessage = 'Unauthorized';
       } else if (response.status === 404) {
         errorMessage = 'Not Found';
+      } else if (response.status === 409) {
+        errorMessage = 'Already executed';
       } else if (response.status >= 500) {
         errorMessage = 'Server Error';
       }
@@ -314,6 +318,22 @@ export async function getExecutionReportContent(id: string, format: 'markdown' |
   return await response.text();
 }
 
+// Agent Status API
+export interface AgentStatus {
+  isOnline: boolean;
+  lastActivity: string | null;
+  stats: {
+    pending: number;
+    running: number;
+    completed: number;
+    failed: number;
+  };
+}
+
+export async function getAgentStatus(): Promise<ApiResponse<AgentStatus>> {
+  return apiFetch<AgentStatus>('/api/agent/status')
+}
+
 export async function getKillSwitchStatus(): Promise<ApiResponse<KillSwitchStatus>> {
   return apiFetch<KillSwitchStatus>('/api/kill-switch')
 }
@@ -390,6 +410,16 @@ export async function getAuditLogs(filters?: AuditLogFilters): Promise<ApiRespon
   return apiFetch<AuditLog[]>(`/api/audit${queryString}`)
 }
 
+// Get fix execution statuses for a recommendation pack
+export interface FixExecutionStatus {
+  status: string;
+  executionId: string;
+}
+
+export async function getFixStatuses(packId: string): Promise<ApiResponse<Record<string, FixExecutionStatus>>> {
+  return apiFetch<Record<string, FixExecutionStatus>>(`/api/recommendations/${packId}/fix-statuses`)
+}
+
 // Execute a single fix from a recommendation pack
 export interface ExecuteSingleFixInput {
   recommendationPackId: string;
@@ -449,4 +479,17 @@ export async function executeRecommendationStep(input: ExecuteStepInput): Promis
       sql: input.sql
     }),
   })
+}
+
+// Schema Browser API
+export async function getConnectionSchema(connectionId: string): Promise<ApiResponse<SchemaSnapshot>> {
+  return apiFetch<SchemaSnapshot>(`/api/connections/${connectionId}/schema`)
+}
+
+export async function getConnectionSchemaHistory(connectionId: string, limit = 10): Promise<ApiResponse<SchemaSnapshot[]>> {
+  return apiFetch<SchemaSnapshot[]>(`/api/connections/${connectionId}/schema/history?limit=${limit}`)
+}
+
+export async function getConnectionSchemaDiff(connectionId: string, fromId: string, toId: string): Promise<ApiResponse<SchemaDiff>> {
+  return apiFetch<SchemaDiff>(`/api/connections/${connectionId}/schema/diff?from=${fromId}&to=${toId}`)
 }

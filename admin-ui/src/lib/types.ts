@@ -203,6 +203,8 @@ export type Execution = {
   startedAt: string
   completedAt: string | null
   error: string | null
+  executedSql?: string | null
+  errorMessage?: string | null
   createdAt?: string
   updatedAt?: string
 }
@@ -298,6 +300,130 @@ export type ScanRun = {
   errorMessage: string | null
   createdAt: string
   updatedAt: string
+}
+
+// Schema Browser types
+export type SchemaSnapshot = {
+  id: string
+  scanRunId: string
+  tables: SchemaTable[]
+  columns: SchemaColumn[]
+  indexes: SchemaIndex[]
+  views: any[]
+  procedures: any[]
+  functions: any[]
+  triggers: any[]
+  events: any[]
+  foreignKeys: SchemaForeignKey[]
+  tableStats: SchemaTableStat[]
+  indexUsage: any[]
+  indexCardinality: any[]
+  lockStats: any[]
+  createdAt: string
+  scanRunCreatedAt?: string
+}
+
+export type SchemaTable = {
+  TABLE_SCHEMA: string
+  TABLE_NAME: string
+  ENGINE: string
+  TABLE_ROWS: number
+  DATA_LENGTH: number
+  INDEX_LENGTH: number
+  AUTO_INCREMENT: number | null
+  TABLE_COLLATION: string
+  CREATE_TIME: string
+  UPDATE_TIME: string | null
+}
+
+export type SchemaColumn = {
+  TABLE_SCHEMA: string
+  TABLE_NAME: string
+  COLUMN_NAME: string
+  ORDINAL_POSITION: number
+  COLUMN_DEFAULT: string | null
+  IS_NULLABLE: string
+  COLUMN_TYPE: string
+  COLUMN_KEY: string
+  EXTRA: string
+}
+
+export type SchemaIndex = {
+  TABLE_SCHEMA: string
+  TABLE_NAME: string
+  INDEX_NAME: string
+  NON_UNIQUE: number
+  SEQ_IN_INDEX: number
+  COLUMN_NAME: string
+  CARDINALITY: number
+  INDEX_TYPE: string
+}
+
+export type SchemaForeignKey = {
+  TABLE_SCHEMA: string
+  TABLE_NAME: string
+  COLUMN_NAME: string
+  CONSTRAINT_NAME: string
+  REFERENCED_TABLE_SCHEMA: string
+  REFERENCED_TABLE_NAME: string
+  REFERENCED_COLUMN_NAME: string
+}
+
+export type SchemaTableStat = {
+  TABLE_SCHEMA: string
+  TABLE_NAME: string
+  TABLE_ROWS: number
+  DATA_LENGTH: number
+  INDEX_LENGTH: number
+  DATA_FREE: number
+  AVG_ROW_LENGTH: number
+}
+
+export type SchemaDiffItem = {
+  type: 'added' | 'removed' | 'changed'
+  entity: 'table' | 'column' | 'index' | 'foreign_key'
+  name: string
+  tableName?: string
+  details?: Record<string, { from: any; to: any }>
+}
+
+export type SchemaDiff = {
+  fromSnapshotId: string
+  toSnapshotId: string
+  fromDate: string
+  toDate: string
+  summary: {
+    tablesAdded: number
+    tablesRemoved: number
+    columnsAdded: number
+    columnsRemoved: number
+    columnsChanged: number
+    indexesAdded: number
+    indexesRemoved: number
+    foreignKeysAdded: number
+    foreignKeysRemoved: number
+  }
+  changes: SchemaDiffItem[]
+}
+
+/** Grouped view of a single table for the schema browser */
+export type TableView = {
+  name: string
+  schema: string
+  engine: string
+  rows: number
+  dataSize: number
+  indexSize: number
+  collation: string
+  columns: SchemaColumn[]
+  indexes: Array<{
+    name: string
+    unique: boolean
+    type: string
+    columns: string[]
+  }>
+  foreignKeys: SchemaForeignKey[]
+  stats?: SchemaTableStat
 }
 
 // Audit Log types

@@ -11,6 +11,7 @@ import { testConnection, deleteConnection } from '@/lib/api-client';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import LoadingSpinner from '@/components/ui/LoadingSpinner';
+import { Database as DatabaseIcon } from 'lucide-react';
 
 export default function ConnectionDetailPage() {
   const { id } = useParams();
@@ -83,9 +84,18 @@ export default function ConnectionDetailPage() {
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold text-gray-900">Connection Details</h1>
         <div className="flex space-x-3">
-          <Button 
-            variant="ghost" 
-            onClick={handleTestConnection} 
+          <Button
+            variant="ghost"
+            onClick={() => router.push(`/admin/connections/${id}/schema`)}
+          >
+            <span className="flex items-center gap-2">
+              <DatabaseIcon className="w-4 h-4" />
+              View Schema
+            </span>
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={handleTestConnection}
             disabled={isTesting}
           >
             {isTesting ? 'Testing...' : 'Test Connection'}
