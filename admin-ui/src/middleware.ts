@@ -33,13 +33,13 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Root path - redirect to admin or login based on auth status
+  // Root path - show landing page or redirect to admin if logged in
   if (pathname === '/') {
     if (accessToken) {
       return NextResponse.redirect(new URL('/admin', request.url));
-    } else {
-      return NextResponse.redirect(new URL('/login', request.url));
     }
+    // Not logged in → show landing page
+    return NextResponse.next();
   }
 
   return NextResponse.next();
