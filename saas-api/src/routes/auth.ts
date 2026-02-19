@@ -53,18 +53,9 @@ const resetPasswordSchema = z.object({
   newPassword: z.string().min(8, 'Password must be at least 8 characters'),
 });
 
-// In-memory store for OAuth state tokens (CSRF protection)
-const oauthStateTokens = new Map<string, number>();
-
-// Clean expired state tokens every 5 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [state, createdAt] of oauthStateTokens) {
-    if (now - createdAt > 10 * 60 * 1000) {
-      oauthStateTokens.delete(state);
-    }
-  }
-}, 5 * 60 * 1000);
+// OAuth state cookie name (CSRF protection - stored in cookie to survive restarts/multi-instance)
+const OAUTH_STATE_COOKIE = 'oauth_state';
+const OAUTH_STATE_MAX_AGE = 600; // 10 minutes
 
 export default async function authRoutes(fastify: FastifyInstance) {
   // Initialize services inside the function to ensure pool is available
@@ -894,9 +885,15 @@ export default async function authRoutes(fastify: FastifyInstance) {
         });
       }
 
-      // Generate CSRF state token
+      // Generate CSRF state token and store in cookie (survives restarts, works with multi-instance)
       const state = crypto.randomBytes(32).toString('hex');
-      oauthStateTokens.set(state, Date.now());
+      reply.setCookie(OAUTH_STATE_COOKIE, state, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/',
+        maxAge: OAUTH_STATE_MAX_AGE,
+      });
 
       const authUrl = googleOAuthService.getAuthorizationUrl(state);
 
@@ -939,15 +936,17 @@ export default async function authRoutes(fastify: FastifyInstance) {
         return reply.redirect(`${frontendUrl}/login?error=oauth_invalid`);
       }
 
-      // Validate CSRF state token
-      if (!oauthStateTokens.has(query.state)) {
+      // Validate CSRF state token from cookie (matches state in redirect URL)
+      const storedState = request.cookies[OAUTH_STATE_COOKIE];
+      if (!storedState || storedState !== query.state) {
         fastify.log.warn({
           event: 'google_oauth_invalid_state',
           ip: request.ip,
         });
+        reply.clearCookie(OAUTH_STATE_COOKIE, { path: '/' });
         return reply.redirect(`${frontendUrl}/login?error=oauth_invalid_state`);
       }
-      oauthStateTokens.delete(query.state);
+      reply.clearCookie(OAUTH_STATE_COOKIE, { path: '/' });
 
       if (!googleOAuthService) {
         return reply.redirect(`${frontendUrl}/login?error=oauth_not_configured`);

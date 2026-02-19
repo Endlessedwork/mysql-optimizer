@@ -1,7 +1,8 @@
 import { FastifyInstance } from 'fastify';
 import { authenticate } from '../middleware/auth';
-import { 
-  getExecutions, 
+import { recordAgentPoll, getLastAgentPollTime } from '../utils/agent-heartbeat';
+import {
+  getExecutions,
   getExecutionById,
   createExecution,
   claimExecution,
@@ -10,6 +11,7 @@ import {
   createVerificationMetrics,
   recordRollback,
   getExecutionWithRecommendations,
+  getAgentStatus,
   CreateExecutionInput,
   VerificationMetricsInput,
   RollbackInput
@@ -40,7 +42,12 @@ export default async function executionsRoutes(fastify: FastifyInstance) {
                 properties: {
                   id: { type: 'string' },
                   connectionId: { type: 'string' },
+                  connectionName: { type: 'string' },
+                  databaseName: { type: 'string' },
                   status: { type: 'string' },
+                  executedSql: { type: 'string' },
+                  errorMessage: { type: 'string' },
+                  recommendationIndex: { type: ['integer', 'null'] },
                   createdAt: { type: 'string' },
                   updatedAt: { type: 'string' }
                 }
@@ -90,6 +97,8 @@ export default async function executionsRoutes(fastify: FastifyInstance) {
                 connectionId: { type: 'string' },
                 connectionName: { type: 'string' },
                 databaseName: { type: 'string' },
+                recommendationPackId: { type: 'string' },
+                recommendationIndex: { type: ['integer', 'null'] },
                 status: { type: 'string' },
                 createdAt: { type: 'string' },
                 updatedAt: { type: 'string' },
@@ -203,6 +212,9 @@ export default async function executionsRoutes(fastify: FastifyInstance) {
     preHandler: [authenticate]
   }, async (request, reply) => {
     try {
+      // Record heartbeat — Agent is alive if it polls this endpoint
+      recordAgentPoll();
+
       const executions = await getScheduledExecutions();
       return {
         success: true,
@@ -374,6 +386,25 @@ export default async function executionsRoutes(fastify: FastifyInstance) {
       return reply.status(500).send({
         success: false,
         error: 'Failed to record rollback'
+      });
+    }
+  });
+
+  // GET /api/agent/status - Agent health and execution statistics
+  fastify.get('/api/agent/status', {
+    preHandler: [authenticate]
+  }, async (request, reply) => {
+    try {
+      const status = await getAgentStatus(getLastAgentPollTime());
+      return {
+        success: true,
+        data: status
+      };
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({
+        success: false,
+        error: 'Failed to fetch agent status'
       });
     }
   });

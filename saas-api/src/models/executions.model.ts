@@ -51,7 +51,11 @@ export const getExecutions = async (filters: { connectionId?: string; status?: s
       eh.id,
       sr.connection_profile_id as "connectionId",
       cp.name as "connectionName",
+      cp.database_name as "databaseName",
       eh.execution_status as status,
+      eh.executed_sql as "executedSql",
+      eh.error_message as "errorMessage",
+      eh.recommendation_index as "recommendationIndex",
       eh.created_at as "createdAt",
       eh.executed_at as "updatedAt",
       vm.before_metrics,
@@ -89,11 +93,15 @@ export const getExecutions = async (filters: { connectionId?: string; status?: s
   const result = await Database.query<any>(query, params);
 
   return result.rows.map(row => {
-    const execution: Execution = {
+    const execution: any = {
       id: row.id,
       connectionId: row.connectionId,
       connectionName: row.connectionName,
+      databaseName: row.databaseName,
       status: mapExecutionStatus(row.status),
+      executedSql: row.executedSql,
+      errorMessage: row.errorMessage,
+      recommendationIndex: row.recommendationIndex,
       createdAt: row.createdAt?.toISOString() || row.createdAt,
       updatedAt: row.updatedAt?.toISOString() || row.updatedAt
     };
@@ -110,7 +118,7 @@ export const getExecutions = async (filters: { connectionId?: string; status?: s
   });
 };
 
-export const getExecutionById = async (id: string): Promise<(Execution & { recommendations?: any[]; executedSql?: string }) | null> => {
+export const getExecutionById = async (id: string): Promise<(Execution & { recommendations?: any[]; executedSql?: string; recommendationPackId?: string; recommendationIndex?: number | null }) | null> => {
   const result = await Database.query<any>(
     `SELECT
       eh.id,
@@ -121,12 +129,14 @@ export const getExecutionById = async (id: string): Promise<(Execution & { recom
       eh.created_at as "createdAt",
       eh.executed_at as "updatedAt",
       eh.error_message,
+      eh.recommendation_pack_id as "recommendationPackId",
+      eh.recommendation_index as "recommendationIndex",
+      eh.executed_sql as "executedSql",
       vm.before_metrics,
       vm.after_metrics,
       rp.recommendations
     FROM execution_history eh
-    LEFT JOIN approvals a ON a.id = eh.approval_id
-    LEFT JOIN recommendation_packs rp ON rp.id = a.recommendation_pack_id
+    LEFT JOIN recommendation_packs rp ON rp.id = eh.recommendation_pack_id
     LEFT JOIN scan_runs sr ON sr.id = rp.scan_run_id
     LEFT JOIN connection_profiles cp ON cp.id = sr.connection_profile_id
     LEFT JOIN verification_metrics vm ON vm.execution_id = eh.id
@@ -139,30 +149,26 @@ export const getExecutionById = async (id: string): Promise<(Execution & { recom
   }
 
   const row = result.rows[0];
-  const execution: Execution & { databaseName?: string; recommendations?: any[]; executedSql?: string } = {
+  const execution: Execution & { databaseName?: string; recommendations?: any[]; executedSql?: string; recommendationPackId?: string; recommendationIndex?: number | null } = {
     id: row.id,
     connectionId: row.connectionId,
     connectionName: row.connectionName,
     databaseName: row.databaseName,
     status: mapExecutionStatus(row.status),
+    recommendationPackId: row.recommendationPackId,
+    recommendationIndex: row.recommendationIndex,
+    executedSql: row.executedSql,
     createdAt: row.createdAt?.toISOString() || row.createdAt,
     updatedAt: row.updatedAt?.toISOString() || row.updatedAt
   };
 
-  // Parse recommendations
+  // Filter to targeted recommendation if this is a single-fix execution
   if (row.recommendations) {
-    execution.recommendations = row.recommendations;
-  }
-
-  // Check if error_message contains single_fix metadata (JSON)
-  if (row.error_message && row.error_message.startsWith('{')) {
-    try {
-      const metadata = JSON.parse(row.error_message);
-      if (metadata.type === 'single_fix' && metadata.sql) {
-        execution.executedSql = metadata.sql;
-      }
-    } catch {
-      // Not JSON, keep as error message
+    if (row.recommendationIndex !== null && Array.isArray(row.recommendations)) {
+      const targetRec = row.recommendations[row.recommendationIndex];
+      execution.recommendations = targetRec ? [targetRec] : [];
+    } else {
+      execution.recommendations = row.recommendations;
     }
   }
 
@@ -429,6 +435,8 @@ export interface ExecutionWithRecommendations {
   status: string;
   recommendations: any[];
   connectionId?: string;
+  recommendationIndex?: number | null;
+  executedSql?: string | null;
   createdAt: string;
   updatedAt?: string;
 }
@@ -476,7 +484,7 @@ export const createSingleFixExecution = async (input: SingleFixExecutionInput): 
     approvalId = approvalResult.rows[0].id;
   }
 
-  // Create execution record with single fix metadata
+  // Create execution record with proper tracking columns
   const metadata = JSON.stringify({
     type: 'single_fix',
     recommendationIndex: input.recommendationIndex,
@@ -485,10 +493,13 @@ export const createSingleFixExecution = async (input: SingleFixExecutionInput): 
   });
 
   const result = await Database.query<any>(
-    `INSERT INTO execution_history (approval_id, execution_status, error_message, created_at)
-    VALUES ($1, 'pending', $2, NOW())
+    `INSERT INTO execution_history (
+      approval_id, execution_status, error_message,
+      recommendation_pack_id, recommendation_index, fix_index, executed_sql,
+      created_at
+    ) VALUES ($1, 'pending', $2, $3, $4, $5, $6, NOW())
     RETURNING id, created_at as "createdAt"`,
-    [approvalId, metadata]
+    [approvalId, metadata, input.recommendationPackId, input.recommendationIndex, input.fixIndex, input.sql]
   );
 
   const row = result.rows[0];
@@ -549,7 +560,7 @@ export const createStepExecution = async (input: StepExecutionInput): Promise<St
     approvalId = approvalResult.rows[0].id;
   }
 
-  // Create execution record with step metadata
+  // Create execution record with proper tracking columns
   const metadata = JSON.stringify({
     type: 'step_execution',
     recommendationIndex: input.recommendationIndex,
@@ -560,10 +571,13 @@ export const createStepExecution = async (input: StepExecutionInput): Promise<St
   });
 
   const result = await Database.query<any>(
-    `INSERT INTO execution_history (approval_id, execution_status, error_message, created_at)
-    VALUES ($1, 'pending', $2, NOW())
+    `INSERT INTO execution_history (
+      approval_id, execution_status, error_message,
+      recommendation_pack_id, recommendation_index, fix_index, executed_sql,
+      created_at
+    ) VALUES ($1, 'pending', $2, $3, $4, $5, $6, NOW())
     RETURNING id, created_at as "createdAt"`,
-    [approvalId, metadata]
+    [approvalId, metadata, input.recommendationPackId, input.recommendationIndex, input.fixIndex, input.sql]
   );
 
   const row = result.rows[0];
@@ -579,37 +593,163 @@ export const createStepExecution = async (input: StepExecutionInput): Promise<St
   };
 };
 
+// Fix execution status for a specific recommendation+fix combination
+export interface FixExecutionStatus {
+  status: string;
+  executionId: string;
+}
+
+// Get execution statuses for all fixes in a recommendation pack
+// Returns a map keyed by "recommendationIndex:fixIndex"
+export const getFixExecutionStatuses = async (
+  recommendationPackId: string
+): Promise<Record<string, FixExecutionStatus>> => {
+  const result = await Database.query<any>(
+    `SELECT eh.id, eh.execution_status, eh.recommendation_index, eh.fix_index
+     FROM execution_history eh
+     WHERE eh.recommendation_pack_id = $1
+       AND eh.recommendation_index IS NOT NULL
+     ORDER BY eh.created_at DESC`,
+    [recommendationPackId]
+  );
+
+  const statuses: Record<string, FixExecutionStatus> = {};
+
+  for (const row of result.rows) {
+    const key = `${row.recommendation_index}:${row.fix_index ?? 0}`;
+    // Only keep the most recent execution per fix (query is ordered DESC)
+    if (!statuses[key]) {
+      statuses[key] = {
+        status: mapExecutionStatus(row.execution_status),
+        executionId: row.id
+      };
+    }
+  }
+
+  return statuses;
+};
+
+// Check if there's already an active execution for a specific fix
+export const findExistingFixExecution = async (
+  recommendationPackId: string,
+  recommendationIndex: number,
+  fixIndex: number
+): Promise<FixExecutionStatus | null> => {
+  const result = await Database.query<any>(
+    `SELECT id, execution_status
+     FROM execution_history
+     WHERE recommendation_pack_id = $1
+       AND recommendation_index = $2
+       AND fix_index = $3
+       AND execution_status IN ('pending', 'running', 'success')
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [recommendationPackId, recommendationIndex, fixIndex]
+  );
+
+  if (result.rows.length === 0) {
+    return null;
+  }
+
+  const row = result.rows[0];
+  return {
+    status: mapExecutionStatus(row.execution_status),
+    executionId: row.id
+  };
+};
+
+// Agent status — used by Settings page to show agent health
+export interface AgentStatus {
+  isOnline: boolean;
+  lastActivity: string | null;
+  stats: {
+    pending: number;
+    running: number;
+    completed: number;
+    failed: number;
+  };
+}
+
+export const getAgentStatus = async (lastPollAt: Date | null): Promise<AgentStatus> => {
+  const result = await Database.query<any>(
+    `SELECT
+      execution_status,
+      MAX(executed_at) as last_activity,
+      COUNT(*) as count
+    FROM execution_history
+    GROUP BY execution_status`
+  );
+
+  const stats = { pending: 0, running: 0, completed: 0, failed: 0 };
+  let lastActivity: Date | null = null;
+
+  for (const row of result.rows) {
+    const mapped = mapExecutionStatus(row.execution_status);
+    if (mapped in stats) {
+      stats[mapped as keyof typeof stats] = parseInt(row.count, 10);
+    }
+    if (row.last_activity) {
+      const date = new Date(row.last_activity);
+      if (!lastActivity || date > lastActivity) {
+        lastActivity = date;
+      }
+    }
+  }
+
+  // Agent is online if it polled for work within the last 2 minutes
+  const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
+  const isOnline = lastPollAt !== null && lastPollAt > twoMinutesAgo;
+
+  return {
+    isOnline,
+    lastActivity: lastPollAt?.toISOString() || lastActivity?.toISOString() || null,
+    stats
+  };
+};
+
 export const getExecutionWithRecommendations = async (id: string): Promise<ExecutionWithRecommendations | null> => {
   const result = await Database.query<any>(
-    `SELECT 
+    `SELECT
       eh.id,
       eh.approval_id as "approvalId",
       eh.execution_status as status,
+      eh.recommendation_pack_id as "recommendationPackId",
+      eh.recommendation_index as "recommendationIndex",
+      eh.fix_index as "fixIndex",
+      eh.executed_sql as "executedSql",
       eh.created_at as "createdAt",
       eh.executed_at as "updatedAt",
-      a.recommendation_pack_id as "recommendationPackId",
       rp.recommendations,
       sr.connection_profile_id as "connectionId"
     FROM execution_history eh
-    JOIN approvals a ON a.id = eh.approval_id
-    JOIN recommendation_packs rp ON rp.id = a.recommendation_pack_id
+    LEFT JOIN recommendation_packs rp ON rp.id = eh.recommendation_pack_id
     LEFT JOIN scan_runs sr ON sr.id = rp.scan_run_id
     WHERE eh.id = $1`,
     [id]
   );
-  
+
   if (result.rows.length === 0) {
     return null;
   }
-  
+
   const row = result.rows[0];
+
+  // Filter to targeted recommendation if this is a single-fix execution
+  let recommendations = row.recommendations || [];
+  if (row.recommendationIndex !== null && Array.isArray(recommendations)) {
+    const targetRec = recommendations[row.recommendationIndex];
+    recommendations = targetRec ? [targetRec] : [];
+  }
+
   return {
     id: row.id,
     approvalId: row.approvalId,
     recommendationPackId: row.recommendationPackId,
     status: mapExecutionStatus(row.status),
-    recommendations: row.recommendations || [],
+    recommendations,
     connectionId: row.connectionId,
+    recommendationIndex: row.recommendationIndex,
+    executedSql: row.executedSql,
     createdAt: row.createdAt?.toISOString() || row.createdAt,
     updatedAt: row.updatedAt?.toISOString() || row.updatedAt
   };
