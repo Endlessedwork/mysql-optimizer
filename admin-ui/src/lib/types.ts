@@ -346,6 +346,20 @@ export type SchemaColumn = {
   COLUMN_TYPE: string
   COLUMN_KEY: string
   EXTRA: string
+  DATA_TYPE?: string
+  COLUMN_COMMENT?: string
+  // Lowercase variants (MySQL may return either case)
+  column_name?: string
+  data_type?: string
+  is_nullable?: string
+  column_default?: string | null
+  column_comment?: string
+  extra?: string
+  // Enriched fields added by schema browser
+  _isPK?: boolean
+  _isFK?: boolean
+  _isIndexed?: boolean
+  _fkRef?: SchemaForeignKey | null
 }
 
 export type SchemaIndex = {
